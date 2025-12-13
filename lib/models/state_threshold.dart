@@ -19,10 +19,24 @@ class StateThreshold {
     return StateThreshold(
       code: json['code'] as String,
       name: json['name'] as String,
-      salesThreshold: json['sales_threshold'] as int,
-      txnThreshold: json['txn_threshold'] as int?,
+      salesThreshold: _toInt(json['sales_threshold']),
+      txnThreshold: json['txn_threshold'] != null 
+          ? _toInt(json['txn_threshold']) 
+          : null,
       logicType: json['logic_type'] as String,
     );
+  }
+
+  /// Helper method to convert various numeric types to int
+  static int _toInt(dynamic value) {
+    if (value == null) {
+      throw ArgumentError('Cannot convert null to int');
+    }
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.parse(value);
+    // Handle BigInt or other numeric types
+    return int.parse(value.toString());
   }
 
   /// Check if nexus is reached based on logic type
