@@ -114,42 +114,90 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       _results = [];
     });
 
-    final url = Uri.parse(
-        'https://$shopName.myshopify.com/admin/api/2024-01/orders.json?status=any&limit=250');
-
     try {
-      final response = await http.get(
-        url,
-        headers: {'X-Shopify-Access-Token': accessToken},
-      );
+      // 直近12ヶ月の期間を計算
+      final now = DateTime.now();
+      final twelveMonthsAgo = DateTime(now.year - 1, now.month, now.day);
+      
+      debugPrint('📅 集計期間: ${twelveMonthsAgo.toString().split(' ')[0]} ~ ${now.toString().split(' ')[0]}');
 
-      if (response.statusCode != 200) {
-        throw Exception('API Error: ${response.statusCode}');
-      }
+      // すべての注文を取得（ページネーション対応）
+      List<dynamic> allOrders = [];
+      String? nextPageUrl;
+      int pageCount = 0;
+      
+      // 初回リクエスト
+      var url = Uri.parse(
+          'https://$shopName.myshopify.com/admin/api/2024-01/orders.json?status=any&limit=250');
 
-      final data = json.decode(response.body);
-      final List<dynamic> orders = data['orders'];
+      do {
+        pageCount++;
+        setState(() {
+          _statusMessage = 'Shopifyからデータを取得中... (ページ $pageCount)';
+        });
+
+        final response = await http.get(
+          url,
+          headers: {'X-Shopify-Access-Token': accessToken},
+        );
+
+        if (response.statusCode != 200) {
+          throw Exception('API Error: ${response.statusCode}');
+        }
+
+        final data = json.decode(response.body);
+        final List<dynamic> orders = data['orders'];
+        allOrders.addAll(orders);
+
+        debugPrint('📦 ページ $pageCount: ${orders.length}件取得 (累計: ${allOrders.length}件)');
+
+        // 次のページのURLを取得（Linkヘッダーから）
+        nextPageUrl = _getNextPageUrl(response.headers['link']);
+        
+        if (nextPageUrl != null) {
+          url = Uri.parse(nextPageUrl);
+          // API Rate Limitを考慮して少し待機
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+      } while (nextPageUrl != null);
+
+      debugPrint('✅ 全 ${allOrders.length}件の注文を取得完了');
 
       setState(() {
-        _statusMessage = '${orders.length}件の注文データを解析中...';
+        _statusMessage = '${allOrders.length}件の注文データを解析中...';
       });
 
-      // 集計ロジック: 売上額と取引回数の両方をカウント
+      // 集計ロジック: 売上額と取引回数の両方をカウント（期間フィルタリング付き）
       Map<String, double> stateSales = {};
       Map<String, int> stateTransactions = {};
+      int filteredCount = 0;
+      int outOfRangeCount = 0;
 
-      for (var order in orders) {
+      for (var order in allOrders) {
         // 配送先住所がない、または米国以外はスキップ
         var shipping = order['shipping_address'];
         if (shipping == null) continue;
         if (shipping['country_code'] != 'US') continue;
+
+        // 注文日時をチェック（直近12ヶ月のみ）
+        String? createdAt = order['created_at'];
+        if (createdAt != null) {
+          DateTime orderDate = DateTime.parse(createdAt);
+          if (orderDate.isBefore(twelveMonthsAgo)) {
+            outOfRangeCount++;
+            continue; // 12ヶ月より古い注文はスキップ
+          }
+        }
 
         String state = shipping['province_code'];
         double amount = double.parse(order['total_price']);
 
         stateSales[state] = (stateSales[state] ?? 0.0) + amount;
         stateTransactions[state] = (stateTransactions[state] ?? 0) + 1;
+        filteredCount++;
       }
+
+      debugPrint('📊 集計結果: $filteredCount件を集計 ($outOfRangeCount件は期間外のため除外)');
 
       // 結果リストを作成
       List<Map<String, dynamic>> tempResults = [];
@@ -198,7 +246,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       setState(() {
         _results = tempResults;
         _isLoading = false;
-        _statusMessage = '診断完了 (${tempResults.length}州)';
+        _statusMessage = '診断完了 (${tempResults.length}州, 直近12ヶ月: $filteredCount件の注文)';
       });
     } catch (e) {
       setState(() {
@@ -206,6 +254,21 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
         _statusMessage = 'エラーが発生しました: $e';
       });
     }
+  }
+
+  /// Linkヘッダーから次のページのURLを抽出
+  String? _getNextPageUrl(String? linkHeader) {
+    if (linkHeader == null) return null;
+
+    // Linkヘッダーの形式: <url>; rel="next", <url>; rel="previous"
+    final links = linkHeader.split(',');
+    for (var link in links) {
+      if (link.contains('rel="next"')) {
+        final match = RegExp(r'<(.+?)>').firstMatch(link);
+        return match?.group(1);
+      }
+    }
+    return null;
   }
 
   @override
