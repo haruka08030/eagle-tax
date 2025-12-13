@@ -1,17 +1,18 @@
-import 'dart:convert';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/state_threshold.dart';
+import 'dart:convert';
 
-// ▼▼▼ Supabase設定 (ここを書き換えてください) ▼▼▼
-const String supabaseUrl = 'YOUR_SUPABASE_URL';
-const String supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY';
-// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+  await dotenv.load(fileName: ".env");
+
+  final String supabaseUrl = dotenv.env['SUPABASE_URL']!;
+  final String supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY']!;
+
   await Supabase.initialize(
     url: supabaseUrl,
     anonKey: supabaseAnonKey,
@@ -44,10 +45,9 @@ class TaxMonitorScreen extends StatefulWidget {
 }
 
 class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
-  // ▼▼▼ ここを書き換えてください ▼▼▼
-  final String shopName = 'eagle-tax-dev-01'; // .myshopify.com の前の部分
-  final String accessToken = 'shpat_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; // コピーしたトークン
-  // ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+  late String shopName;
+  late String accessToken;
+
 
   bool _isLoading = false;
   String _statusMessage = 'ボタンを押して診断を開始してください';
@@ -59,6 +59,8 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   @override
   void initState() {
     super.initState();
+    shopName = dotenv.env['SHOPIFY_SHOP_NAME']!;
+    accessToken = dotenv.env['SHOPIFY_ACCESS_TOKEN']!;
     _loadStateThresholds();
   }
 
@@ -70,15 +72,28 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
           .select()
           .order('code', ascending: true);
 
+      debugPrint('📥 Received ${(response as List).length} records from Supabase');
+
+      List<StateThreshold> thresholds = [];
+      for (var json in response) {
+        try {
+          final threshold = StateThreshold.fromJson(json);
+          thresholds.add(threshold);
+        } catch (e) {
+          debugPrint('⚠️ Error parsing state record: $json');
+          debugPrint('⚠️ Parse error: $e');
+          // Continue processing other records
+        }
+      }
+
       setState(() {
-        _stateThresholds = (response as List)
-            .map((json) => StateThreshold.fromJson(json))
-            .toList();
+        _stateThresholds = thresholds;
       });
 
       debugPrint('✅ Loaded ${_stateThresholds.length} state thresholds from Supabase');
-    } catch (e) {
+    } catch (e, stackTrace) {
       debugPrint('❌ Error loading state thresholds: $e');
+      debugPrint('Stack trace: $stackTrace');
       setState(() {
         _statusMessage = 'Supabaseからのデータ取得に失敗しました: $e';
       });
