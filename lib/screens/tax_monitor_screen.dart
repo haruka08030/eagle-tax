@@ -95,7 +95,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       final aggregatedData = _aggregateOrders(allOrders, twelveMonthsAgo);
       
       // 結果リストを作成
-      final tempResults = _createResults(aggregatedData);
+      final tempResults = _createResults(aggregatedData, twelveMonthsAgo, now);
 
       setState(() {
         _results = tempResults;
@@ -150,7 +150,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   }
 
   /// 集計データから結果リストを作成
-  List<Map<String, dynamic>> _createResults(Map<String, dynamic> aggregatedData) {
+  List<Map<String, dynamic>> _createResults(Map<String, dynamic> aggregatedData, DateTime startDate, DateTime updateTime) {
     final stateSales = aggregatedData['stateSales'] as Map<String, double>;
     final stateTransactions = aggregatedData['stateTransactions'] as Map<String, int>;
     List<Map<String, dynamic>> tempResults = [];
@@ -183,6 +183,8 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
         'txnLimit': threshold.txnThreshold,
         'logicType': threshold.logicType,
         'isDanger': isDanger,
+        'periodStartDate': startDate,
+        'lastUpdated': updateTime,
       });
     }
 
@@ -200,9 +202,10 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC), // 全体の背景色
       appBar: AppBar(
         title: const Text('🇺🇸 Eagle Tax Monitor'),
-        backgroundColor: Colors.blueAccent,
+        backgroundColor: const Color(0xFF4F46E5), // プライマリカラー
         foregroundColor: Colors.white,
       ),
       body: Center(
