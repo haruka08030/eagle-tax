@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/state_threshold.dart';
 import '../services/supabase_service.dart';
 import '../services/shopify_service.dart';
@@ -13,16 +16,24 @@ class TaxMonitorScreen extends StatefulWidget {
 }
 
 class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
+  // Services and config
   late String _shopName;
   late String _accessToken;
-  
-  bool _isLoading = false;
-  String _statusMessage = 'ボタンを押して診断を開始してください';
-  List<Map<String, dynamic>> _results = [];
-  List<StateThreshold> _stateThresholds = [];
-
   final _supabaseService = SupabaseService();
   late ShopifyService _shopifyService;
+
+  // State variables
+  bool _isLoading = false;
+  bool _isThresholdsLoading = true;
+  String _statusMessage = 'データを読み込んでいます...';
+  List<Map<String, dynamic>> _results = [];
+  List<StateThreshold> _stateThresholds = [];
+  
+  // Date range state
+  DateTime _startDate = DateTime(DateTime.now().year - 1, DateTime.now().month, DateTime.now().day);
+  DateTime _endDate = DateTime.now();
+  final DateFormat _dateFormatter = DateFormat.yMMMd('ja');
+  static const _cacheKey = 'state_thresholds_cache';
 
   @override
   void initState() {
@@ -36,19 +47,91 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     _loadStateThresholds();
   }
 
-  /// Supabaseから州の基準データを取得
+  /// 1. Cache -> 2. Network の順でデータを読み込む
   Future<void> _loadStateThresholds() async {
+    await _loadThresholdsFromCache();
+    await _fetchAndCacheThresholds(isRefresh: _stateThresholds.isEmpty);
+  }
+  
+  /// Cacheからデータを読み込む
+  Future<void> _loadThresholdsFromCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final cachedData = prefs.getString(_cacheKey);
+
+    if (cachedData != null) {
+      try {
+        final List<dynamic> decodedData = jsonDecode(cachedData);
+        final thresholds = decodedData
+            .map((item) => StateThreshold.fromJson(item as Map<String, dynamic>))
+            .toList();
+        
+        if (thresholds.isNotEmpty && mounted) {
+          setState(() {
+            _stateThresholds = thresholds;
+            _isThresholdsLoading = false; // Show cached data immediately
+            _statusMessage = '期間を選択して診断を開始 (キャッシュ)';
+          });
+          debugPrint('✅ Loaded ${thresholds.length} state thresholds from CACHE');
+        }
+      } catch (e) {
+        debugPrint('❌ Error decoding cached thresholds: $e');
+      }
+    }
+  }
+
+  /// Supabaseからデータを取得してCacheを更新する
+  Future<void> _fetchAndCacheThresholds({bool isRefresh = false}) async {
+    // Show loading indicator only on forced refresh or if cache was empty
+    if (isRefresh && mounted) {
+      setState(() {
+        _isThresholdsLoading = true;
+        _statusMessage = '州のしきい値データを更新中...';
+      });
+    }
+
     try {
       final thresholds = await _supabaseService.fetchStateThresholds();
-      setState(() {
-        _stateThresholds = thresholds;
-      });
-      debugPrint('✅ Loaded ${_stateThresholds.length} state thresholds from Supabase');
+      final prefs = await SharedPreferences.getInstance();
+      final List<Map<String, dynamic>> jsonData = thresholds.map((t) => t.toJson()).toList();
+      await prefs.setString(_cacheKey, jsonEncode(jsonData));
+      
+      if (mounted) {
+        setState(() {
+          _stateThresholds = thresholds;
+          _isThresholdsLoading = false;
+          _statusMessage = _stateThresholds.isEmpty
+              ? '州データが見つかりません。'
+              : '期間を選択して診断を開始';
+        });
+      }
+      debugPrint('✅ Loaded and cached ${thresholds.length} thresholds from Supabase');
     } catch (e, stackTrace) {
-      debugPrint('❌ Error loading state thresholds: $e');
+      debugPrint('❌ Error loading thresholds from Supabase: $e');
       debugPrint('Stack trace: $stackTrace');
+      
+      if (_stateThresholds.isEmpty && mounted) {
+        setState(() {
+          _statusMessage = 'データ取得に失敗しました: $e';
+          _isThresholdsLoading = false;
+        });
+      }
+    }
+  }
+
+
+  /// 期間選択ダイアログを表示
+  Future<void> _selectDateRange() async {
+    final newDateRange = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
+    );
+
+    if (newDateRange != null) {
       setState(() {
-        _statusMessage = 'Supabaseからのデータ取得に失敗しました: $e';
+        _startDate = newDateRange.start;
+        _endDate = newDateRange.end;
       });
     }
   }
@@ -69,13 +152,8 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     });
 
     try {
-      // 直近12ヶ月の期間を計算
-      final now = DateTime.now();
-      final twelveMonthsAgo = DateTime(now.year - 1, now.month, now.day);
-      
-      debugPrint('📅 集計期間: ${twelveMonthsAgo.toString().split(' ')[0]} ~ ${now.toString().split(' ')[0]}');
+      debugPrint('📅 集計期間: ${_startDate.toString().split(' ')[0]} ~ ${_endDate.toString().split(' ')[0]}');
 
-      // すべての注文を取得
       final allOrders = await _shopifyService.fetchAllOrders(
         onProgress: (pageCount, totalCount) {
           setState(() {
@@ -91,16 +169,13 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
         _statusMessage = '${allOrders.length}件の注文データを解析中...';
       });
 
-      // 集計処理
-      final aggregatedData = _aggregateOrders(allOrders, twelveMonthsAgo);
-      
-      // 結果リストを作成
-      final tempResults = _createResults(aggregatedData, twelveMonthsAgo, now);
+      final aggregatedData = _aggregateOrders(allOrders, _startDate, _endDate);
+      final tempResults = _createResults(aggregatedData, _startDate, DateTime.now());
 
       setState(() {
         _results = tempResults;
         _isLoading = false;
-        _statusMessage = '診断完了 (${tempResults.length}州, 直近12ヶ月: ${aggregatedData['filteredCount']}件の注文)';
+        _statusMessage = '診断完了 (${tempResults.length}州, ${aggregatedData['filteredCount']}件の注文)';
       });
     } catch (e) {
       setState(() {
@@ -111,22 +186,24 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   }
 
   /// 注文データを集計
-  Map<String, dynamic> _aggregateOrders(List<dynamic> orders, DateTime cutoffDate) {
+  Map<String, dynamic> _aggregateOrders(List<dynamic> orders, DateTime startDate, DateTime endDate) {
     Map<String, double> stateSales = {};
     Map<String, int> stateTransactions = {};
     int filteredCount = 0;
     int outOfRangeCount = 0;
+
+    // endDateの時刻を23:59:59に設定して、その日全体が含まれるようにする
+    final inclusiveEndDate = DateTime(endDate.year, endDate.month, endDate.day, 23, 59, 59);
 
     for (var order in orders) {
       var shipping = order['shipping_address'];
       if (shipping == null) continue;
       if (shipping['country_code'] != 'US') continue;
 
-      // 期間フィルタリング
       String? createdAt = order['created_at'];
       if (createdAt != null) {
         DateTime orderDate = DateTime.parse(createdAt);
-        if (orderDate.isBefore(cutoffDate)) {
+        if (orderDate.isBefore(startDate) || orderDate.isAfter(inclusiveEndDate)) {
           outOfRangeCount++;
           continue;
         }
@@ -188,7 +265,6 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       });
     }
 
-    // 危険な順に並び替え
     tempResults.sort((a, b) {
       if (a['isDanger'] != b['isDanger']) {
         return a['isDanger'] ? -1 : 1;
@@ -202,11 +278,18 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC), // 全体の背景色
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         title: const Text('🇺🇸 Eagle Tax Monitor'),
-        backgroundColor: const Color(0xFF4F46E5), // プライマリカラー
+        backgroundColor: const Color(0xFF4F46E5),
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _isLoading ? null : () => _fetchAndCacheThresholds(isRefresh: true),
+            tooltip: '州のしきい値データを再読み込み',
+          ),
+        ],
       ),
       body: Center(
         child: Container(
@@ -214,19 +297,35 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              // コントロールパネル
               Card(
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
+                       Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.calendar_today, size: 16),
+                          const SizedBox(width: 8),
+                          Text(
+                            '集計期間: ${_dateFormatter.format(_startDate)} - ${_dateFormatter.format(_endDate)}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                           IconButton(
+                            icon: const Icon(Icons.edit, size: 16),
+                            onPressed: _selectDateRange,
+                            tooltip: '集計期間を変更',
+                          )
+                        ],
+                      ),
+                      const Divider(height: 20),
                       Text(
                         _statusMessage,
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 10),
                       ElevatedButton.icon(
-                        onPressed: _isLoading ? null : _fetchAndAnalyze,
+                        onPressed: _isLoading || _isThresholdsLoading ? null : _fetchAndAnalyze,
                         icon: _isLoading
                             ? const SizedBox(
                                 width: 20,
@@ -248,16 +347,17 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
               ),
               const SizedBox(height: 20),
 
-              // 結果リスト
               Expanded(
-                child: _results.isEmpty
-                    ? const Center(child: Text('データがありません'))
-                    : ListView.builder(
-                        itemCount: _results.length,
-                        itemBuilder: (context, index) {
-                          return StateResultCard(result: _results[index]);
-                        },
-                      ),
+                child: _isThresholdsLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _results.isEmpty && !_isLoading
+                        ? const Center(child: Text('データがありません'))
+                        : ListView.builder(
+                            itemCount: _results.length,
+                            itemBuilder: (context, index) {
+                              return StateResultCard(result: _results[index]);
+                            },
+                          ),
               ),
             ],
           ),
