@@ -41,21 +41,23 @@ class StateThreshold {
     required double totalSales,
     required int transactionCount,
   }) {
-    if (logicType == 'NONE') return false;
-    if (salesThreshold == null) return false;
-    if (txnThreshold == null) return false;
-    final limit = salesThreshold!;
-    final countLimit = txnThreshold!;
-    
     switch (logicType) {
+      case 'NONE':
+        return false;
+
       case 'SALES_ONLY':
-        return totalSales >= limit;
+        if (salesThreshold == null) return false;
+        return totalSales >= salesThreshold!;
+
       case 'OR':
-        return totalSales >= limit ||
-            (txnThreshold != null && transactionCount >= countLimit);
+        final salesExceeded = salesThreshold != null && totalSales >= salesThreshold!;
+        final txnsExceeded = txnThreshold != null && transactionCount >= txnThreshold!;
+        return salesExceeded || txnsExceeded;
+
       case 'AND':
-        return totalSales >= limit &&
-            (txnThreshold != null && transactionCount >= countLimit);
+        if (salesThreshold == null || txnThreshold == null) return false;
+        return totalSales >= salesThreshold! && transactionCount >= txnThreshold!;
+        
       default:
         return false;
     }
