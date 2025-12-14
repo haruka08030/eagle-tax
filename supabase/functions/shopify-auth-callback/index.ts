@@ -6,6 +6,10 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+  const shopDomainRegex = /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/;
+  if (!shopDomainRegex.test(shop)) {
+    throw new Error('Invalid shop domain format');
+  }
 
   try {
     const { code, shop } = await req.json();
@@ -44,47 +48,72 @@ serve(async (req) => {
     const { access_token } = await tokenResponse.json();
 
     if (!access_token) {
-      throw new Error('Access token not found in Shopify response.');
-    }
+      const supabaseUrl = Deno.env.get('SUPABASE_URL');
+      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-    // 2. Save the access token and shop name to the user's profile
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-    );
-    
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      throw new Error('Missing Authorization header');
-    }
-    const { data: { user } } = await supabaseAdmin.auth.getUser(authHeader.replace('Bearer ', ''));
+      if (!supabaseUrl || !supabaseServiceKey) {
+        throw new Error('Missing Supabase configuration in environment variables.');
+      }
 
-    if (!user) {
-      throw new Error('Could not get user from JWT');
-    }
+      const supabaseAdmin = createClient(
+        supabaseUrl,
+        supabaseServiceKey,
+      );
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL') ?? '',
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      );
 
-    const { error: updateError } = await supabaseAdmin
-      .from('profiles')
-      .upsert({
-        id: user.id,
-        shopify_shop_name: shop,
-        shopify_access_token: access_token,
-        updated_at: new Date().toISOString(),
+      const authHeader = req.headers.get('Authorization');
+      if (!authHeader) {
+        throw new Error('Missing Authorization header');
+      }
+      const { data: { user } } = await supabaseAdmin.auth.getUser(authHeader.replace('Bearer ', ''));
+
+      if (!user) {
+        throw new Error('Could not get user from JWT');
+      }
+
+      const { error: updateError } = await supabaseAdmin
+        .from('profiles')
+        .upsert({
+          id: user.id,
+          shopify_shop_name: shop,
+          shopify_access_token: access_token,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      return new Response(JSON.stringify({ message: 'Shopify store connected successfully.' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
       });
 
-    if (updateError) {
-      throw updateError;
+    } catch (err) {
+      // Determine appropriate status code based on error type
+      let status = 500; // Default to server error
+      let message = 'An internal error occurred';
+
+      if (err.message.includes('Missing required parameters') ||
+        err.message.includes('Invalid shop domain')) {
+        status = 400;
+        message = err.message;
+      } else if (err.message.includes('Authorization') ||
+        err.message.includes('Could not get user')) {
+        status = 401;
+        message = 'Authentication failed';
+      } else if (err.message.includes('Failed to exchange token')) {
+        status = 400;
+        message = 'Invalid authorization code or shop';
+      }
+
+      return new Response(JSON.stringify({ error: message }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status,
+      });
     }
 
-    return new Response(JSON.stringify({ message: 'Shopify store connected successfully.' }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200,
-    });
-
-  } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 400,
-    });
-  }
-});
+  });

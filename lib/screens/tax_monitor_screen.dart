@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:eagle_tax/screens/connect_shopify_screen.dart';
 import 'package:eagle_tax/services/profile_service.dart';
+import 'package:eagle_tax/widgets/dashboard_summary_card.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -38,6 +39,11 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   final DateFormat _dateFormatter = DateFormat.yMMMd('ja');
   static const _cacheKey = 'state_thresholds_cache';
 
+  // State variables for summary
+  int _atRiskCount = 0;
+  int _warningCount = 0;
+  double _totalAnalyzedSales = 0;
+
   @override
   void initState() {
     super.initState();
@@ -50,26 +56,35 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       _isInitialising = true;
       _statusMessage = 'ユーザー情報を確認中...';
     });
+    try {
+      final profileData = await _profileService.getProfile();
+      
+      if (!mounted) return;
 
-    final profileData = await _profileService.getProfile();
-    
-    if (!mounted) return;
-
-    if (profileData != null && profileData['shopify_access_token'] != null) {
-      _shopifyService = ShopifyService(
-        shopName: profileData['shopify_shop_name'],
-        accessToken: profileData['shopify_access_token'],
-      );
-      setState(() {
-        _profile = profileData;
-        _isInitialising = false;
-      });
-      await _loadStateThresholds();
-    } else {
-       setState(() {
-        _profile = null;
-        _isInitialising = false;
-      });
+      if (profileData != null && profileData['shopify_access_token'] != null &&
+           profileData['shopify_shop_name'] != null) {
+        _shopifyService = ShopifyService(
+          shopName: profileData['shopify_shop_name'],
+          accessToken: profileData['shopify_access_token'],
+        );
+        setState(() {
+          _profile = profileData;
+          _isInitialising = false;
+        });
+        await _loadStateThresholds();
+      } else {
+         setState(() {
+          _profile = null;
+          _isInitialising = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isInitialising = false;
+          _statusMessage = 'ユーザー情報の取得に失敗しました: $e';
+        });
+      }
     }
   }
 
@@ -159,6 +174,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     );
 
     if (newDateRange != null) {
+      if (!mounted) return;
       setState(() {
         _startDate = newDateRange.start;
         _endDate = newDateRange.end;
@@ -242,7 +258,13 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       }
 
       final state = shipping['province_code'];
-      final amount = double.parse(order['total_price']);
+      if (state == null) continue;
+
+      final totalPriceStr = order['total_price'];
+      if (totalPriceStr == null) continue;
+
+      final amount = double.tryParse(totalPriceStr.toString());
+      if (amount == null) continue;
       stateSales[state] = (stateSales[state] ?? 0.0) + amount;
       stateTransactions[state] = (stateTransactions[state] ?? 0) + 1;
       filteredCount++;
@@ -256,10 +278,17 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     final stateTransactions = aggregatedData['stateTransactions'] as Map<String, int>;
     List<Map<String, dynamic>> tempResults = [];
 
+    // サマリー用の変数をリセット
+    int atRisk = 0;
+    int warning = 0;
+    double totalSalesSum = 0;
+
     for (var entry in stateSales.entries) {
       String stateCode = entry.key;
       double totalSales = entry.value;
       int txnCount = stateTransactions[stateCode] ?? 0;
+      
+      totalSalesSum += totalSales; // 全州の売上合計
 
       StateThreshold? threshold = _stateThresholds
           .where((st) => st.code == stateCode)
@@ -271,6 +300,14 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
         totalSales: totalSales,
         transactionCount: txnCount,
       );
+      
+      if (isDanger) {
+        atRisk++;
+      } else {
+        // Warning判定 (80%超え)
+        bool isWarning = _checkWarning(threshold, totalSales, txnCount);
+        if (isWarning) warning++;
+      }
 
       tempResults.add({
         'state': stateCode, 'stateName': threshold.name, 'total': totalSales,
@@ -283,8 +320,29 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       if (a['isDanger'] != b['isDanger']) return a['isDanger'] ? -1 : 1;
       return b['total'].compareTo(a['total']);
     });
+    
+    // サマリー状態を更新
+    _atRiskCount = atRisk;
+    _warningCount = warning;
+    _totalAnalyzedSales = totalSalesSum;
 
     return tempResults;
+  }
+  
+  bool _checkWarning(StateThreshold threshold, double currentSales, int currentTxn) {
+    if (threshold.logicType == 'NONE') return false;
+    
+    // 売上基準の80%チェック
+    if (threshold.salesThreshold != null) {
+      if (currentSales >= threshold.salesThreshold! * 0.8) return true;
+    }
+    
+    // 取引数基準の80%チェック
+    if (threshold.txnThreshold != null) {
+      if (currentTxn >= threshold.txnThreshold! * 0.8) return true;
+    }
+    
+    return false;
   }
 
   @override
@@ -323,20 +381,29 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text('Shopifyストアと連携してください。'),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.add_link),
-              label: const Text('Shopifyと連携'),
+            const Icon(Icons.store_mall_directory, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text(
+              'Shopifyストアと連携してください',
+              style: TextStyle(fontSize: 18, color: Colors.grey),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
               onPressed: () async {
                 final result = await Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const ConnectShopifyScreen()),
                 );
-                if (result == true) {
+                if (result == true && mounted) {
                   _initServices(); // Re-initialize everything
                 }
               },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF95BF47), // Shopify Green
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+              ),
+              child: const Text('Shopifyと連携する'),
             ),
           ],
         ),
@@ -346,10 +413,22 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     // Main Tax Monitor UI
     return Center(
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 800),
+        constraints: const BoxConstraints(maxWidth: 900),
         padding: const EdgeInsets.all(20),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // サマリーカード (結果がある場合のみ表示)
+            if (_results.isNotEmpty) ...[
+              DashboardSummaryCard(
+                atRiskCount: _atRiskCount,
+                warningCount: _warningCount,
+                totalAnalyzedSales: _totalAnalyzedSales,
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // コントロールパネル
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -372,8 +451,11 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
                       ],
                     ),
                     const Divider(height: 20),
-                    Text( _statusMessage, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 10),
+                    if (_statusMessage.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Text(_statusMessage, style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700])),
+                      ),
                     ElevatedButton.icon(
                       onPressed: _isLoading || _isInitialising ? null : _fetchAndAnalyze,
                       icon: _isLoading
@@ -389,11 +471,19 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            
+            // リストタイトル
+            if (_results.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: Text('州ごとの詳細レポート', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey)),
+              ),
+
             Expanded(
               child: _stateThresholds.isEmpty
                   ? const Center(child: Text('表示する州データがありません。'))
                   : _results.isEmpty && !_isLoading
-                      ? const Center(child: Text('診断結果がありません。'))
+                      ? const Center(child: Text('上のボタンを押して診断を開始してください。'))
                       : ListView.builder(
                           itemCount: _results.length,
                           itemBuilder: (context, index) {
