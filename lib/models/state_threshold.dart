@@ -27,6 +27,16 @@ class StateThreshold {
     );
   }
 
+  Map<String, dynamic> toJson() {
+    return {
+      'code': code,
+      'name': name,
+      'sales_threshold': salesThreshold,
+      'txn_threshold': txnThreshold,
+      'logic_type': logicType,
+    };
+  }
+
   static int _toInt(dynamic value) {
     if (value == null) {
       throw ArgumentError('Cannot convert null to int');
