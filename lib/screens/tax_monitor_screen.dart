@@ -332,18 +332,20 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   bool _checkWarning(StateThreshold threshold, double currentSales, int currentTxn) {
     if (threshold.logicType == 'NONE') return false;
     
-    // 売上基準の80%チェック
-    if (threshold.salesThreshold != null) {
-      if (currentSales >= threshold.salesThreshold! * 0.8) return true;
+    bool salesWarning = threshold.salesThreshold != null && 
+                      currentSales >= threshold.salesThreshold! * 0.8;
+    bool txnWarning = threshold.txnThreshold != null && 
+                    currentTxn >= threshold.txnThreshold! * 0.8;
+  
+    if (threshold.logicType == 'AND') {
+      // AND logic, warn if both are approaching OR one is exceeded
+      return salesWarning && txnWarning;
+    } else {
+      // OR logic, warn if either is approaching
+      return salesWarning || txnWarning;
     }
-    
-    // 取引数基準の80%チェック
-    if (threshold.txnThreshold != null) {
-      if (currentTxn >= threshold.txnThreshold! * 0.8) return true;
-    }
-    
-    return false;
   }
+
 
   @override
   Widget build(BuildContext context) {

@@ -2,13 +2,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
-  }
-  const shopDomainRegex = /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/;
-  if (!shopDomainRegex.test(shop)) {
-    throw new Error('Invalid shop domain format');
   }
 
   try {
@@ -16,6 +12,11 @@ serve(async (req) => {
 
     if (!code || !shop) {
       throw new Error('Missing required parameters: code and shop');
+    }
+
+    const shopDomainRegex = /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/;
+    if (!shopDomainRegex.test(shop)) {
+      throw new Error('Invalid shop domain format');
     }
 
     // These should be set in your Supabase project's environment variables
@@ -46,9 +47,8 @@ serve(async (req) => {
     }
 
     const { access_token } = await tokenResponse.json();
-
-    if (!access_token) {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    if (access_token) {
       const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
       if (!supabaseUrl || !supabaseServiceKey) {
@@ -58,10 +58,6 @@ serve(async (req) => {
       const supabaseAdmin = createClient(
         supabaseUrl,
         supabaseServiceKey,
-      );
-      const supabaseAdmin = createClient(
-        Deno.env.get('SUPABASE_URL') ?? '',
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
       );
 
       const authHeader = req.headers.get('Authorization');
@@ -92,28 +88,34 @@ serve(async (req) => {
         status: 200,
       });
 
-    } catch (err) {
-      // Determine appropriate status code based on error type
-      let status = 500; // Default to server error
-      let message = 'An internal error occurred';
-
-      if (err.message.includes('Missing required parameters') ||
-        err.message.includes('Invalid shop domain')) {
-        status = 400;
-        message = err.message;
-      } else if (err.message.includes('Authorization') ||
-        err.message.includes('Could not get user')) {
-        status = 401;
-        message = 'Authentication failed';
-      } else if (err.message.includes('Failed to exchange token')) {
-        status = 400;
-        message = 'Invalid authorization code or shop';
-      }
-
-      return new Response(JSON.stringify({ error: message }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status,
-      });
+    } else {
+      throw new Error('Failed to retrieve access token');
     }
 
-  });
+  } catch (error: any) {
+    const err = error;
+    // Determine appropriate status code based on error type
+    let status = 500; // Default to server error
+    let message = 'An internal error occurred';
+
+    if (err.message && (err.message.includes('Missing required parameters') ||
+      err.message.includes('Invalid shop domain'))) {
+      status = 400;
+      message = err.message;
+    } else if (err.message && (err.message.includes('Authorization') ||
+      err.message.includes('Could not get user'))) {
+      status = 401;
+      message = 'Authentication failed';
+    } else if (err.message && err.message.includes('Failed to exchange token')) {
+      status = 400;
+      message = 'Invalid authorization code or shop';
+    } else if (err.message) {
+      message = err.message;
+    }
+
+    return new Response(JSON.stringify({ error: message }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status,
+    });
+  }
+});
