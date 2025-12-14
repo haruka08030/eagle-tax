@@ -16,8 +16,8 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
   String? _errorMessage;
 
   // IMPORTANT: This must match one of the "Allowed redirection URL(s)" in your Shopify App settings
-  final String _redirectUri = 'https://your-app-url.com/callback'; 
-  final String _scopes = 'read_orders'; // The permissions your app needs
+  final String _redirectUri = dotenv.env['SHOPIFY_REDIRECT_URI'] ?? '';
+  final String _scopes = 'read_orders';
 
   @override
   void initState() {
@@ -34,10 +34,18 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
       return;
     }
 
-    final authUrl =
-        'https://${shopName}.myshopify.com/admin/oauth/authorize?client_id=$shopifyApiKey&scope=$_scopes&redirect_uri=$_redirectUri';
+    final authUrl = Uri.https(
+      '${shopName}.myshopify.com',
+      '/admin/oauth/authorize',
+      {
+        'client_id': shopifyApiKey,
+        'scope': _scopes,
+        'redirect_uri': _redirectUri,
+      },
+    ).toString();
 
     _controller = WebViewController()
+      // JavaScript required for Shopify OAuth flow
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -79,14 +87,14 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
         throw Exception('認証に失敗しました。リダイレクトURLからコードまたはショップを取得できませんでした。');
       }
 
-      // Invoke the Supabase Edge Function
       final response = await Supabase.instance.client.functions.invoke(
         'shopify-auth-callback',
         body: {'code': code, 'shop': shop},
       );
 
-      if (response.status != 200) {
-        throw Exception('Edge Functionの呼び出しに失敗しました: ${response.data['error']}');
+      if (response.status < 200 || response.status >= 300) {
+        final errorMsg = response.data is Map ? response.data['error'] ?? 'Unknown error' : 'Unknown error';
+        throw Exception('Edge Functionの呼び出しに失敗しました: $errorMsg');
       }
       
       // On success, pop the screen
