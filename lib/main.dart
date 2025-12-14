@@ -5,11 +5,9 @@ import 'screens/tax_monitor_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // 環境変数を読み込み
+
   await dotenv.load(fileName: ".env");
 
-  // Supabaseを初期化
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL']!,
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
