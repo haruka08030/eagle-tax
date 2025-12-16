@@ -1,6 +1,8 @@
 import { serve } from "http/server";
 import { createClient } from "@supabase/supabase-js";
 import { corsHeaders } from '../_shared/cors.ts'
+import { createAuthenticatedClient } from '../_shared/supabase-client.ts'
+import { errorResponse, successResponse } from '../_shared/response-utils.ts'
 
 interface ShopifyOrder {
   id: number;
@@ -22,26 +24,11 @@ serve(async (req: Request) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error('Missing required environment variables: SUPABASE_URL or SUPABASE_ANON_KEY')
-    }
-
-    const supabaseClient = createClient(
-      supabaseUrl,
-      supabaseAnonKey,
-      { global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } } }
-    )
-
+    const supabaseClient = createAuthenticatedClient(req);
     const { data: { user } } = await supabaseClient.auth.getUser()
 
     if (!user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 401,
-      })
+      return errorResponse('Unauthorized', 401)
     }
 
     const { data: profile, error: profileError } = await supabaseClient
@@ -52,19 +39,13 @@ serve(async (req: Request) => {
 
     if (profileError || !profile) {
       console.error('Profile fetch error:', profileError)
-      return new Response(JSON.stringify({ error: 'Profile not found or error fetching it.' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 404,
-      })
+      return errorResponse('Profile not found or error fetching it.', 404)
     }
 
     const { shopify_access_token: accessToken, shopify_shop_name: shopName } = profile
 
     if (!shopName || !accessToken) {
-      return new Response(JSON.stringify({ error: 'Shopify integration not complete. Missing token or shop name.' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
-      })
+      return errorResponse('Shopify integration not complete. Missing token or shop name.', 400)
     }
 
     const { pageUrl } = await req.json().catch(() => ({ pageUrl: null }));
@@ -78,22 +59,10 @@ serve(async (req: Request) => {
           parsedUrl.hostname.endsWith('.myshopify.com');
 
         if (!isValidShopifyDomain) {
-          return new Response(
-            JSON.stringify({ error: 'Invalid Shopify URL provided' }),
-            {
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-              status: 400,
-            }
-          );
+          return errorResponse('Invalid Shopify URL provided', 400);
         }
       } catch {
-        return new Response(
-          JSON.stringify({ error: 'Invalid URL format' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+        return errorResponse('Invalid URL format', 400);
       }
     }
 
@@ -137,30 +106,19 @@ serve(async (req: Request) => {
       console.log(`📄 Next page available`)
     }
 
-    return new Response(
-      JSON.stringify({
-        orders: data.orders,
-        nextPageUrl: nextPageUrl,
-        count: data.orders.length,
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      },
-    )
+    return successResponse({
+      orders: data.orders,
+      nextPageUrl: nextPageUrl,
+      count: data.orders.length,
+    })
+
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     console.error('❌ Error:', errorMessage)
-    return new Response(
-      JSON.stringify({
-        error: errorMessage,
-        orders: [],
-        nextPageUrl: null,
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500,
-      },
-    )
+    return errorResponse(errorMessage, 500, {
+      orders: [],
+      nextPageUrl: null,
+    })
   }
 })
+
