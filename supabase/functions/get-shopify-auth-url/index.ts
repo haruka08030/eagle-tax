@@ -63,10 +63,11 @@ serve(async (req: Request) => {
         url.searchParams.append('redirect_uri', redirectUri);
         url.searchParams.append('state', state);
 
-        // 5. Return the URL and redirect URI to the client
+        // 5. Return the URL, redirect URI, and state to the client
         return successResponse({
             authUrl: url.toString(),
-            redirectUri: redirectUri
+            redirectUri: redirectUri,
+            state: state
         });
 
     } catch (error) {

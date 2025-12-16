@@ -26,4 +26,36 @@ class SupabaseService {
 
     return thresholds;
   }
+  /// Shopify認証URLを取得
+  Future<Map<String, dynamic>> getShopifyAuthUrl(String shopName, String redirectUri) async {
+    final response = await _client.functions.invoke(
+      'get-shopify-auth-url',
+      body: {
+        'shopName': shopName,
+        'redirectUri': redirectUri,
+      },
+    );
+
+    if (response.status >= 200 && response.status < 300) {
+      return response.data as Map<String, dynamic>;
+    } else {
+      final errorMsg = response.data is Map 
+          ? response.data['error'] ?? 'Server error' 
+          : 'Server error: ${response.status}';
+      throw Exception(errorMsg);
+    }
+  }
+
+  /// Shopify認証コールバック処理（トークン交換）
+  Future<void> exchangeShopifyAuthCode(Map<String, String> queryParams) async {
+    final response = await _client.functions.invoke(
+      'shopify-auth-callback',
+      body: queryParams,
+    );
+
+    if (response.status < 200 || response.status >= 300) {
+      final errorMsg = response.data is Map ? response.data['error'] ?? 'Unknown error' : 'Unknown error';
+      throw Exception('Shopify連携に失敗しました: $errorMsg');
+    }
+  }
 }
