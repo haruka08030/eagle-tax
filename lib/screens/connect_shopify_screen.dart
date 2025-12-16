@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:eagle_tax/services/supabase_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -15,7 +16,9 @@ class ConnectShopifyScreen extends StatefulWidget {
 class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with WidgetsBindingObserver {
   bool _isLoading = false;
   String? _errorMessage;
+  String? _oauthState; // Store OAuth state for CSRF protection
   final _shopNameController = TextEditingController();
+  final _supabaseService = SupabaseService();
   
   // AppLinks instance for handling deep links
   late final AppLinks _appLinks;
@@ -79,6 +82,7 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
     // Validate state if implemented, etc.
     final code = uri.queryParameters['code'];
     final shop = uri.queryParameters['shop'];
+    final returnedState = uri.queryParameters['state'];
     
      if (code == null || shop == null) {
         setState(() {
@@ -87,18 +91,18 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
         });
         return;
       }
-
+      
+      // CSRF Check: Verify state matches
+      if (_oauthState == null || returnedState != _oauthState) {
+         setState(() {
+            _isLoading = false;
+            _errorMessage = 'セキュリティ検証に失敗しました (State Mismatch)。もう一度お試しください。';
+        });
+        return;
+      }
 
     try {
-      final response = await Supabase.instance.client.functions.invoke(
-        'shopify-auth-callback',
-        body: {'code': code, 'shop': shop},
-      );
-
-      if (response.status < 200 || response.status >= 300) {
-        final errorMsg = response.data is Map ? response.data['error'] ?? 'Unknown error' : 'Unknown error';
-        throw Exception('Edge Functionの呼び出しに失敗しました: $errorMsg');
-      }
+      await _supabaseService.exchangeShopifyAuthCode(uri.queryParameters);
       
       // On success, pop the screen
       if (mounted) {
@@ -123,51 +127,43 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
     setState(() {
       _errorMessage = null;
       _isLoading = true;
+      _oauthState = null; // Reset state
     });
 
     final shopName = _shopNameController.text.trim();
     
     // Call the backend to generate the auth URL
-    Supabase.instance.client.functions.invoke(
-      'get-shopify-auth-url',
-      body: {
-        'shopName': shopName,
-        'redirectUri': 'http://localhost:3000/',
-      },
-    ).then((response) async {
+    _supabaseService.getShopifyAuthUrl(
+      shopName,
+      'http://localhost:3000/',
+    ).then((data) async {
       if (!mounted) return;
 
-      if (response.status >= 200 && response.status < 300) {
-        final data = response.data as Map<String, dynamic>;
-        final authUrlString = data['authUrl'] as String;
-        // redirectUri is returned but we don't strictly need it here if the backend configured it correctly for the OAuth URL.
-        // But we DO need to make sure the app is listening for it.
-
-        final authUrl = Uri.parse(authUrlString);
-        
-        if (await canLaunchUrl(authUrl)) {
-             await launchUrl(
-                authUrl,
-                mode: LaunchMode.externalApplication, // Important: Open in external browser
-             );
-             // We remain in loading state waiting for the callback...
-             // OR we can stop loading and let the user wait. 
-             // Ideally show "Waiting for completion..."
-        } else {
-             throw Exception('ブラウザを開けませんでした: $authUrlString');
-        }
-
-      } else {
-        final errorMsg = response.data is Map 
-            ? response.data['error'] ?? 'Server error' 
-            : 'Server error: ${response.status}';
-        
-        throw Exception(errorMsg);
+      final authUrlString = data['authUrl'] as String;
+      final state = data['state'] as String?;
+      
+      if (state != null) {
+        _oauthState = state; // Store state for verification
       }
+
+      final authUrl = Uri.parse(authUrlString);
+      
+      if (await canLaunchUrl(authUrl)) {
+           await launchUrl(
+              authUrl,
+              mode: LaunchMode.externalApplication, // Important: Open in external browser
+           );
+           // We remain in loading state waiting for the callback...
+           // OR we can stop loading and let the user wait. 
+           // Ideally show "Waiting for completion..."
+      } else {
+           throw Exception('ブラウザを開けませんでした: $authUrlString');
+      }
+
     }).catchError((error) {
        if (!mounted) return;
        setState(() {
-          _errorMessage = 'エラー: $error';
+          _errorMessage = error.toString();
           _isLoading = false;
        });
     });

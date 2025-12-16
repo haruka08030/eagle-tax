@@ -2,6 +2,7 @@ import { serve } from 'http/server';
 
 import { corsHeaders } from '../_shared/cors.ts';
 import { createAdminClient } from '../_shared/supabase-client.ts';
+import { errorResponse, successResponse } from '../_shared/response-utils.ts';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -9,10 +10,11 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { code, shop } = await req.json();
+    const queryParams = await req.json();
+    const { code, shop, hmac, ...rest } = queryParams;
 
-    if (!code || !shop) {
-      throw new Error('Missing required parameters: code and shop');
+    if (!code || !shop || !hmac) {
+      throw new Error('Missing required parameters: code, shop, or hmac');
     }
 
     const shopDomainRegex = /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/;
@@ -26,6 +28,50 @@ serve(async (req: Request) => {
 
     if (!shopifyApiKey || !shopifyApiSecret) {
       throw new Error('Missing Shopify API credentials in environment variables.');
+    }
+
+    // HMAC Validation
+    // 1. Remove 'hmac' and create a map of remaining params
+    const messageParams = { code, shop, ...rest };
+
+    // 2. Sort keys lexicographically and construct query string
+    const message = Object.keys(messageParams)
+      .sort()
+      .map(key => `${key}=${messageParams[key]}`)
+      .join('&');
+
+    // 3. Calculate HMAC
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(shopifyApiSecret);
+    const messageData = encoder.encode(message);
+
+    const key = await crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+
+    // Convert hex hmac to ArrayBuffer
+    // The hmac from Shopify is a hex string. We need to parse it to a buffer or verify against it.
+    // crypto.subtle.verify takes the signature as a BufferSource.
+
+    // Helper to convert hex string to Uint8Array
+    const fromHexString = (hexString: string) =>
+      new Uint8Array(hexString.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+
+    const signature = fromHexString(hmac);
+
+    const isValid = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      signature,
+      messageData
+    );
+
+    if (!isValid) {
+      return errorResponse('HMAC verification failed', 400);
     }
 
     // 1. Exchange the authorization code for a permanent access token
@@ -77,12 +123,7 @@ serve(async (req: Request) => {
       throw updateError;
     }
 
-    return new Response(JSON.stringify({ message: 'Shopify store connected successfully.' }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200,
-    });
-
-
+    return successResponse({ message: 'Shopify store connected successfully.' });
 
   } catch (error: any) {
     const err = error;
@@ -91,7 +132,7 @@ serve(async (req: Request) => {
     let message = 'An internal error occurred';
 
     if (err.message && (err.message.includes('Missing required parameters') ||
-      err.message.includes('Invalid shop domain'))) {
+      err.message.includes('Invalid shop domain') || err.message.includes('HMAC'))) {
       status = 400;
       message = err.message;
     } else if (err.message && (err.message.includes('Authorization') ||
@@ -105,9 +146,6 @@ serve(async (req: Request) => {
       message = err.message;
     }
 
-    return new Response(JSON.stringify({ error: message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status,
-    });
+    return errorResponse(message, status);
   }
 });
