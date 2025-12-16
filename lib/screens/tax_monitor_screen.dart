@@ -2,12 +2,11 @@ import 'dart:convert';
 import 'package:eagle_tax/models/profile.dart';
 import 'package:app_links/app_links.dart';
 import 'package:eagle_tax/screens/connect_shopify_screen.dart';
-import 'package:eagle_tax/services/profile_service.dart';
+import 'package:eagle_tax/services/tax_analysis_service.dart';
 import 'package:eagle_tax/widgets/dashboard_summary_card.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/state_threshold.dart';
 import '../services/auth_service.dart';
 import '../services/supabase_service.dart';
@@ -24,7 +23,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   // Services
   final _supabaseService = SupabaseService();
   final _authService = AuthService();
-  final _profileService = ProfileService();
+  final _taxAnalysisService = TaxAnalysisService();
 
   // State variables
   bool _isLoading = false;
@@ -69,7 +68,6 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
    final shop = uri.queryParameters['shop'];
    if (code != null && shop != null) {
       debugPrint('Shopify callback detected: $uri');
-      // Navigate to ConnectShopifyScreen to handle the auth code
       WidgetsBinding.instance.addPostFrameCallback((_) {
          Navigator.push(
           context,
@@ -90,7 +88,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       _statusMessage = 'ユーザー情報を確認中...';
     });
     try {
-      final profileData = await _profileService.getProfile();
+      final profileData = await _supabaseService.getProfile();
       
       if (!mounted) return;
 
@@ -224,7 +222,10 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     try {
       debugPrint('📅 集計期間: ${_startDate.toString().split(' ')[0]} ~ ${_endDate.toString().split(' ')[0]}');
 
-      final allOrders = await _fetchAllOrdersFromShopify(
+      // Use SupabaseService to fetch orders
+      final allOrders = await _supabaseService.fetchShopifyOrders(
+        startDate: _startDate,
+        endDate: _endDate,
         onProgress: (pageCount, totalCount) {
           if (mounted) {
             setState(() {
@@ -242,14 +243,18 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
         });
       }
 
-      final aggregatedData = _aggregateOrders(allOrders, _startDate, _endDate);
-      final tempResults = _createResults(aggregatedData, _startDate, DateTime.now());
+      // Use TaxAnalysisService for business logic
+      final aggregatedData = _taxAnalysisService.aggregateOrders(allOrders, _startDate, _endDate);
+      final analysisResult = _taxAnalysisService.createResults(aggregatedData, _startDate, DateTime.now(), _stateThresholds);
 
       if (mounted) {
         setState(() {
-          _results = tempResults;
+          _results = analysisResult.details;
+          _atRiskCount = analysisResult.atRiskCount;
+          _warningCount = analysisResult.warningCount;
+          _totalAnalyzedSales = analysisResult.totalAnalyzedSales;
           _isLoading = false;
-          _statusMessage = '診断完了 (${tempResults.length}州, ${aggregatedData['filteredCount']}件の注文)';
+          _statusMessage = '診断完了 (${analysisResult.details.length}州, ${aggregatedData['filteredCount']}件の注文)';
         });
       }
     } catch (e) {
@@ -259,166 +264,6 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
           _statusMessage = 'エラーが発生しました: $e';
         });
       }
-    }
-  }
-
-  Future<List<dynamic>> _fetchAllOrdersFromShopify({
-    required Function(int pageCount, int totalCount) onProgress,
-  }) async {
-    List<dynamic> allOrders = [];
-    String? nextPageUrl;
-    int pageCount = 0;
-
-    do {
-      pageCount++;
-
-      // Format dates for Shopify API (ISO 8601)
-      // Start date: 00:00:00
-      final startIso = _startDate.toIso8601String();
-      // End date: 23:59:59 of the selected end date
-      final endIso = DateTime(_endDate.year, _endDate.month, _endDate.day, 23, 59, 59).toIso8601String();
-
-      final response = await Supabase.instance.client.functions.invoke(
-        'fetch-shopify-orders',
-        body: {
-          if (nextPageUrl != null) 'pageUrl': nextPageUrl,
-          if (nextPageUrl == null) 'startDate': startIso,
-          if (nextPageUrl == null) 'endDate': endIso,
-        },
-      );
-
-      if (response.status != 200) {
-        final errorData = response.data;
-        final errorMessage = errorData is Map ? errorData['error'] : 'Unknown function error';
-        throw Exception('Edge Function Error: $errorMessage');
-      }
-
-      final data = response.data as Map<String, dynamic>;
-
-      if (data['error'] != null) {
-        throw Exception('Shopify API Error: ${data['error']}');
-      }
-
-      final List<dynamic> orders = data['orders'] as List<dynamic>;
-      allOrders.addAll(orders);
-
-      onProgress(pageCount, allOrders.length);
-
-      nextPageUrl = data['nextPageUrl'] as String?;
-
-      if (nextPageUrl != null) {
-        await Future.delayed(const Duration(milliseconds: 500));
-      }
-    } while (nextPageUrl != null);
-
-    return allOrders;
-  }
-
-  /// 注文データを集計
-  Map<String, dynamic> _aggregateOrders(List<dynamic> orders, DateTime startDate, DateTime endDate) {
-    Map<String, double> stateSales = {};
-    Map<String, int> stateTransactions = {};
-    int filteredCount = 0;
-    final inclusiveEndDate = DateTime(endDate.year, endDate.month, endDate.day, 23, 59, 59);
-
-    for (var order in orders) {
-      final shipping = order['shipping_address'];
-      if (shipping == null || shipping['country_code'] != 'US') continue;
-
-      final createdAt = order['created_at'];
-      if (createdAt != null) {
-        final orderDate = DateTime.parse(createdAt);
-        if (orderDate.isBefore(startDate) || orderDate.isAfter(inclusiveEndDate)) {
-          continue;
-        }
-      }
-
-      final state = shipping['province_code'];
-      if (state == null) continue;
-
-      final totalPriceStr = order['total_price'];
-      if (totalPriceStr == null) continue;
-
-      final amount = double.tryParse(totalPriceStr.toString());
-      if (amount == null) continue;
-      stateSales[state] = (stateSales[state] ?? 0.0) + amount;
-      stateTransactions[state] = (stateTransactions[state] ?? 0) + 1;
-      filteredCount++;
-    }
-    return { 'stateSales': stateSales, 'stateTransactions': stateTransactions, 'filteredCount': filteredCount };
-  }
-
-  /// 集計データから結果リストを作成
-  List<Map<String, dynamic>> _createResults(Map<String, dynamic> aggregatedData, DateTime startDate, DateTime updateTime) {
-    final stateSales = aggregatedData['stateSales'] as Map<String, double>;
-    final stateTransactions = aggregatedData['stateTransactions'] as Map<String, int>;
-    List<Map<String, dynamic>> tempResults = [];
-
-    // サマリー用の変数をリセット
-    int atRisk = 0;
-    int warning = 0;
-    double totalSalesSum = 0;
-
-    for (var entry in stateSales.entries) {
-      String stateCode = entry.key;
-      double totalSales = entry.value;
-      int txnCount = stateTransactions[stateCode] ?? 0;
-      
-      totalSalesSum += totalSales; // 全州の売上合計
-
-      StateThreshold? threshold = _stateThresholds
-          .where((st) => st.code == stateCode)
-          .firstOrNull;
-
-      if (threshold == null) continue;
-
-      bool isDanger = threshold.checkNexus(
-        totalSales: totalSales,
-        transactionCount: txnCount,
-      );
-      
-      if (isDanger) {
-        atRisk++;
-      } else {
-        // Warning判定 (80%超え)
-        bool isWarning = _checkWarning(threshold, totalSales, txnCount);
-        if (isWarning) warning++;
-      }
-
-      tempResults.add({
-        'state': stateCode, 'stateName': threshold.name, 'total': totalSales,
-        'txnCount': txnCount, 'salesLimit': threshold.salesThreshold, 'txnLimit': threshold.txnThreshold,
-        'logicType': threshold.logicType, 'isDanger': isDanger, 'periodStartDate': startDate, 'lastUpdated': updateTime,
-      });
-    }
-
-    tempResults.sort((a, b) {
-      if (a['isDanger'] != b['isDanger']) return a['isDanger'] ? -1 : 1;
-      return b['total'].compareTo(a['total']);
-    });
-    
-    // サマリー状態を更新
-    _atRiskCount = atRisk;
-    _warningCount = warning;
-    _totalAnalyzedSales = totalSalesSum;
-
-    return tempResults;
-  }
-  
-  bool _checkWarning(StateThreshold threshold, double currentSales, int currentTxn) {
-    if (threshold.logicType == 'NONE') return false;
-    
-    bool salesWarning = threshold.salesThreshold != null && 
-                      currentSales >= threshold.salesThreshold! * 0.8;
-    bool txnWarning = threshold.txnThreshold != null && 
-                    currentTxn >= threshold.txnThreshold! * 0.8;
-  
-    if (threshold.logicType == 'AND') {
-      // AND logic, warn if both are approaching OR one is exceeded
-      return salesWarning && txnWarning;
-    } else {
-      // OR logic, warn if either is approaching
-      return salesWarning || txnWarning;
     }
   }
 
