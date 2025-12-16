@@ -73,7 +73,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
          Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const ConnectShopifyScreen(authCode: code, shop: shop)),
+          MaterialPageRoute(builder: (context) => ConnectShopifyScreen(initialQueryParams: uri.queryParameters)),
         ).then((result) {
            if (result == true && mounted) {
              _initServices(); // Refresh profile after successful connection
