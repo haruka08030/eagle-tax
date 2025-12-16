@@ -1,11 +1,13 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:eagle_tax/models/profile.dart';
 
 class ProfileService {
   final SupabaseClient _supabase = Supabase.instance.client;
 
   // Fetches the profile for the current user.
   // Returns null if no profile is found.
-  Future<Map<String, dynamic>?> getProfile() async {
+  Future<Profile?> getProfile() async {
     final user = _supabase.auth.currentUser;
     if (user == null) {
       return null;
@@ -18,11 +20,12 @@ class ProfileService {
           .eq('id', user.id)
           .single();
       
-      return response;
+      return Profile.fromJson(response);
     } catch (e) {
       // This can happen if the profile doesn't exist yet, which is not a critical error.
-      print('Error fetching profile: $e');
+      debugPrint('Error fetching profile: $e');
       return null;
     }
   }
 }
+

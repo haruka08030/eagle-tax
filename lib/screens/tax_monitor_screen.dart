@@ -1,14 +1,15 @@
 import 'dart:convert';
+import 'package:eagle_tax/models/profile.dart';
 import 'package:eagle_tax/screens/connect_shopify_screen.dart';
 import 'package:eagle_tax/services/profile_service.dart';
 import 'package:eagle_tax/widgets/dashboard_summary_card.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/state_threshold.dart';
 import '../services/auth_service.dart';
 import '../services/supabase_service.dart';
-import '../services/shopify_service.dart';
 import '../widgets/state_result_card.dart';
 
 class TaxMonitorScreen extends StatefulWidget {
@@ -23,7 +24,6 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   final _supabaseService = SupabaseService();
   final _authService = AuthService();
   final _profileService = ProfileService();
-  ShopifyService? _shopifyService;
 
   // State variables
   bool _isLoading = false;
@@ -31,7 +31,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   String _statusMessage = 'データを読み込んでいます...';
   List<Map<String, dynamic>> _results = [];
   List<StateThreshold> _stateThresholds = [];
-  Map<String, dynamic>? _profile;
+  Profile? _profile;
   
   // Date range state
   DateTime _startDate = DateTime(DateTime.now().year - 1, DateTime.now().month, DateTime.now().day);
@@ -61,22 +61,13 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       
       if (!mounted) return;
 
-      if (profileData != null && profileData['shopify_access_token'] != null &&
-           profileData['shopify_shop_name'] != null) {
-        _shopifyService = ShopifyService(
-          shopName: profileData['shopify_shop_name'],
-          accessToken: profileData['shopify_access_token'],
-        );
-        setState(() {
-          _profile = profileData;
-          _isInitialising = false;
-        });
+      setState(() {
+        _profile = profileData;
+        _isInitialising = false;
+      });
+
+      if (profileData?.isShopifyConnected == true) {
         await _loadStateThresholds();
-      } else {
-         setState(() {
-          _profile = null;
-          _isInitialising = false;
-        });
       }
     } catch (e) {
       if (mounted) {
@@ -184,8 +175,8 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
 
   /// Shopifyから注文データを取得して分析
   Future<void> _fetchAndAnalyze() async {
-    if (_shopifyService == null) {
-       ScaffoldMessenger.of(context).showSnackBar(
+    if (_profile?.isShopifyConnected != true) {
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Shopifyが連携されていません。')),
       );
       return;
@@ -200,11 +191,11 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     try {
       debugPrint('📅 集計期間: ${_startDate.toString().split(' ')[0]} ~ ${_endDate.toString().split(' ')[0]}');
 
-      final allOrders = await _shopifyService!.fetchAllOrders(
+      final allOrders = await _fetchAllOrdersFromShopify(
         onProgress: (pageCount, totalCount) {
-          if(mounted) {
+          if (mounted) {
             setState(() {
-              _statusMessage = 'Shopifyからデータを取得中... (ページ $pageCount)';
+              _statusMessage = 'Shopifyからデータを取得中... ($totalCount件)';
             });
           }
         },
@@ -236,6 +227,50 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
         });
       }
     }
+  }
+
+  Future<List<dynamic>> _fetchAllOrdersFromShopify({
+    required Function(int pageCount, int totalCount) onProgress,
+  }) async {
+    List<dynamic> allOrders = [];
+    String? nextPageUrl;
+    int pageCount = 0;
+
+    do {
+      pageCount++;
+
+      final response = await Supabase.instance.client.functions.invoke(
+        'fetch-shopify-orders',
+        body: {
+          if (nextPageUrl != null) 'pageUrl': nextPageUrl,
+        },
+      );
+
+      if (response.status != 200) {
+        final errorData = response.data;
+        final errorMessage = errorData is Map ? errorData['error'] : 'Unknown function error';
+        throw Exception('Edge Function Error: $errorMessage');
+      }
+
+      final data = response.data as Map<String, dynamic>;
+
+      if (data['error'] != null) {
+        throw Exception('Shopify API Error: ${data['error']}');
+      }
+
+      final List<dynamic> orders = data['orders'] as List<dynamic>;
+      allOrders.addAll(orders);
+
+      onProgress(pageCount, allOrders.length);
+
+      nextPageUrl = data['nextPageUrl'] as String?;
+
+      if (nextPageUrl != null) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    } while (nextPageUrl != null);
+
+    return allOrders;
   }
 
   /// 注文データを集計
@@ -352,11 +387,11 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: Text(_profile?['shopify_shop_name'] ?? '🇺🇸 Eagle Tax Monitor'),
+        title: Text(_profile?.shopifyShopName ?? '🇺🇸 Eagle Tax Monitor'),
         backgroundColor: const Color(0xFF4F46E5),
         foregroundColor: Colors.white,
         actions: [
-          if (_profile != null)
+          if (_profile?.isShopifyConnected == true)
             IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _isLoading ? null : () => _fetchAndCacheThresholds(isRefresh: true),
@@ -378,7 +413,7 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_profile == null) {
+    if (_profile?.isShopifyConnected != true) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

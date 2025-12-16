@@ -4,5 +4,6 @@
         "supabase/functions"
     ],
     "deno.unstable": true,
-    "deno.lint": true
+    "deno.lint": true,
+    "deno.importMap": "supabase/functions/import_map.json"
 }

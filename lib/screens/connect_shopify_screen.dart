@@ -1,7 +1,9 @@
+import 'dart:async';
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 
 class ConnectShopifyScreen extends StatefulWidget {
   const ConnectShopifyScreen({super.key});
@@ -11,82 +13,67 @@ class ConnectShopifyScreen extends StatefulWidget {
 }
 
 class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
-  late final WebViewController _controller;
-  bool _isLoading = true;
+  bool _isLoading = false;
   String? _errorMessage;
-
-  // IMPORTANT: This must match one of the "Allowed redirection URL(s)" in your Shopify App settings
-  final String _redirectUri = dotenv.env['SHOPIFY_REDIRECT_URI'] ?? '';
-  final String _scopes = 'read_orders';
+  final _shopNameController = TextEditingController();
+  
+  // AppLinks instance for handling deep links
+  late final AppLinks _appLinks;
+  StreamSubscription<Uri>? _linkSubscription;
 
   @override
   void initState() {
     super.initState();
-
-    final shopifyApiKey = dotenv.env['SHOPIFY_API_KEY'];
-    final shopName = dotenv.env['SHOPIFY_SHOP_NAME']; // In a real app, you'd ask the user for this
-
-    if (shopifyApiKey == null || shopName == null) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Shopify APIキーまたはショップ名が.envファイルに設定されていません。';
-      });
-      return;
-    }
-
-    final authUrl = Uri.https(
-      '${shopName}.myshopify.com',
-      '/admin/oauth/authorize',
-      {
-        'client_id': shopifyApiKey,
-        'scope': _scopes,
-        'redirect_uri': _redirectUri,
-      },
-    ).toString();
-
-    _controller = WebViewController()
-      // JavaScript required for Shopify OAuth flow
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (String url) {
-            setState(() {
-              _isLoading = true;
-              _errorMessage = null;
-            });
-          },
-          onPageFinished: (String url) {
-            setState(() {
-              _isLoading = false;
-            });
-          },
-          onNavigationRequest: (NavigationRequest request) {
-            if (request.url.startsWith(_redirectUri)) {
-              _handleRedirect(request.url);
-              return NavigationDecision.prevent; // Stop the redirect
-            }
-            return NavigationDecision.navigate;
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse(authUrl));
+    _initDeepLinkListener();
   }
 
-  Future<void> _handleRedirect(String url) async {
+  @override
+  void dispose() {
+    _linkSubscription?.cancel();
+    _shopNameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initDeepLinkListener() async {
+    _appLinks = AppLinks();
+
+    // Listen for incoming deep links
+    _linkSubscription = _appLinks.uriLinkStream.listen((Uri? uri) {
+      if (uri != null) {
+        _handleRedirect(uri);
+      }
+    }, onError: (err) {
+      debugPrint('Deep link error: $err');
+    });
+  }
+
+  Future<void> _handleRedirect(Uri uri) async {
+    // Check if this is the Shopify callback
+    // The path should match your configured redirect URI path, e.g., /shopify-callback
+    // Or you can check specific query params.
+    if (!uri.toString().contains('code=') || !uri.toString().contains('shop=')) {
+        return;
+    }
+
     setState(() {
       _isLoading = true;
       _errorMessage = '認証情報を確認しています...';
     });
-
-    try {
-      final uri = Uri.parse(url);
-      final code = uri.queryParameters['code'];
-      final shop = uri.queryParameters['shop'];
-
-      if (code == null || shop == null) {
-        throw Exception('認証に失敗しました。リダイレクトURLからコードまたはショップを取得できませんでした。');
+    
+    // Validate state if implemented, etc.
+    final code = uri.queryParameters['code'];
+    final shop = uri.queryParameters['shop'];
+    
+     if (code == null || shop == null) {
+        setState(() {
+            _isLoading = false;
+            _errorMessage = '無効な認証レスポンスです。';
+        });
+        return;
       }
 
+
+    try {
       final response = await Supabase.instance.client.functions.invoke(
         'shopify-auth-callback',
         body: {'code': code, 'shop': shop},
@@ -115,24 +102,120 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
     }
   }
 
+
+  void _startShopifyAuth() {
+    setState(() {
+      _errorMessage = null;
+      _isLoading = true;
+    });
+
+    final shopName = _shopNameController.text.trim();
+    
+    // Call the backend to generate the auth URL
+    Supabase.instance.client.functions.invoke(
+      'get-shopify-auth-url',
+      body: {
+        'shopName': shopName,
+        'redirectUri': 'http://localhost:3000/',
+      },
+    ).then((response) async {
+      if (!mounted) return;
+
+      if (response.status >= 200 && response.status < 300) {
+        final data = response.data as Map<String, dynamic>;
+        final authUrlString = data['authUrl'] as String;
+        // redirectUri is returned but we don't strictly need it here if the backend configured it correctly for the OAuth URL.
+        // But we DO need to make sure the app is listening for it.
+
+        final authUrl = Uri.parse(authUrlString);
+        
+        if (await canLaunchUrl(authUrl)) {
+             await launchUrl(
+                authUrl,
+                mode: LaunchMode.externalApplication, // Important: Open in external browser
+             );
+             // We remain in loading state waiting for the callback...
+             // OR we can stop loading and let the user wait. 
+             // Ideally show "Waiting for completion..."
+        } else {
+             throw Exception('ブラウザを開けませんでした: $authUrlString');
+        }
+
+      } else {
+        final errorMsg = response.data is Map 
+            ? response.data['error'] ?? 'Server error' 
+            : 'Server error: ${response.status}';
+        
+        throw Exception(errorMsg);
+      }
+    }).catchError((error) {
+       if (!mounted) return;
+       setState(() {
+          _errorMessage = 'エラー: $error';
+          _isLoading = false;
+       });
+    });
+  }
+
+
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Shopifyと連携')),
-      body: _errorMessage != null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
-              ),
-            )
-          : Stack(
-              children: [
-                WebViewWidget(controller: _controller),
-                if (_isLoading)
-                  const Center(child: CircularProgressIndicator()),
-              ],
+      appBar: AppBar(
+        title: const Text('Shopifyと連携'),
+      ),
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'あなたのShopifyストアに接続します。\n\n「Shopifyに接続」およびボタンを押すと、ブラウザが開きます。ログインと承認を行ってください。',
+            style: TextStyle(fontSize: 18),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 24),
+          TextField(
+            controller: _shopNameController,
+            decoration: const InputDecoration(
+              labelText: 'ショップ名',
+              hintText: 'your-store-name',
+              helperText: 'ストアURLの ".myshopify.com" の前の部分です。',
+              border: OutlineInputBorder(),
             ),
+            keyboardType: TextInputType.text,
+            autocorrect: false,
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: _isLoading ? null : _startShopifyAuth,
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+            child: _isLoading 
+              ? const CircularProgressIndicator(color: Colors.white)
+              : const Text('Shopifyに接続'),
+          ),
+          const SizedBox(height: 16),
+          if (_errorMessage != null)
+             Container(
+                padding: const EdgeInsets.all(8),
+                color: Colors.red.shade50,
+                child: Text(
+                  _errorMessage!,
+                  style: const TextStyle(color: Colors.red),
+                  textAlign: TextAlign.center,
+                ),
+             ),
+        ],
+      ),
     );
   }
 }
