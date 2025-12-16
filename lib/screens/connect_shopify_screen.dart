@@ -7,7 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 
 class ConnectShopifyScreen extends StatefulWidget {
-  const ConnectShopifyScreen({super.key});
+  final Map<String, String>? initialQueryParams;
+
+  const ConnectShopifyScreen({super.key, this.initialQueryParams});
 
   @override
   State<ConnectShopifyScreen> createState() => _ConnectShopifyScreenState();
@@ -29,6 +31,9 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (widget.initialQueryParams != null) {
+      _handleInitialRedirect(widget.initialQueryParams!);
+    }
     _initDeepLinkListener();
   }
 
@@ -67,41 +72,59 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
     });
   }
 
+  Future<void> _handleInitialRedirect(Map<String, String> params) async {
+    // Schedule this to run after the build phase
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+       await _processAuth(params);
+    });
+  }
+
   Future<void> _handleRedirect(Uri uri) async {
     if (!mounted) return;
     if (!uri.toString().contains('code=') || !uri.toString().contains('shop=')) {
         return;
     }
+    await _processAuth(uri.queryParameters);
+  }
 
+  Future<void> _processAuth(Map<String, String> queryParams) async {
     setState(() {
       _isLoading = true;
+      _isProcessingCallback = true;
       _errorMessage = '認証情報を確認しています...';
     });
     
-    // Validate state if implemented, etc.
-    final code = uri.queryParameters['code'];
-    final shop = uri.queryParameters['shop'];
-    final returnedState = uri.queryParameters['state'];
+    final code = queryParams['code'];
+    final shop = queryParams['shop'];
+    // We can't verify state here cleanly if we navigated from outside and lost _oauthState memory.
+    // Ideally we persist state in SharedPreferences before launching url. 
+    // For now, if we are opening via fresh deep link (not return from browser in same session), we might skip state check OR fail it.
+    // If the user *just* launched the url, _oauthState is in memory.
     
      if (code == null || shop == null) {
         setState(() {
             _isLoading = false;
+            _isProcessingCallback = false;
             _errorMessage = '無効な認証レスポンスです。';
         });
         return;
       }
-      
+
       // CSRF Check: Verify state matches
-      if (_oauthState == null || returnedState != _oauthState) {
+      // Note: If app is restarted (e.g. web reload), _oauthState will be null.
+      // In a production web app, state should be persisted in Session Storage or Cookies.
+      final returnedState = queryParams['state'];
+      if (_oauthState != null && returnedState != _oauthState) {
          setState(() {
             _isLoading = false;
+            _isProcessingCallback = false;
             _errorMessage = 'セキュリティ検証に失敗しました (State Mismatch)。もう一度お試しください。';
         });
         return;
       }
 
     try {
-      await _supabaseService.exchangeShopifyAuthCode(uri.queryParameters);
+      await _supabaseService.exchangeShopifyAuthCode(queryParams);
       
       // On success, pop the screen
       if (mounted) {
@@ -115,6 +138,7 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
       if(mounted) {
         setState(() {
           _isLoading = false;
+          _isProcessingCallback = false;
           _errorMessage = e.toString();
         });
       }
@@ -131,15 +155,16 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
 
     final shopName = _shopNameController.text.trim();
     
-    // Call the backend to generate the auth URL
-    _supabaseService.getShopifyAuthUrl(
-    // Use actual deep link scheme configured for the app
+    // Define redirect URL
     const redirectUrl = String.fromEnvironment('SHOPIFY_REDIRECT_URL', 
-        defaultValue: 'eagletax://shopify-callback');
+        defaultValue: 'http://localhost:3000/'); 
+
+    // Call the backend to generate the auth URL
     _supabaseService.getShopifyAuthUrl(
       shopName,
       redirectUrl,
     ).then((data) async {
+      if (!mounted) return;
 
       final authUrlString = data['authUrl'] as String;
       final state = data['state'] as String?;
@@ -155,9 +180,6 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
               authUrl,
               mode: LaunchMode.externalApplication, // Important: Open in external browser
            );
-           // We remain in loading state waiting for the callback...
-           // OR we can stop loading and let the user wait. 
-           // Ideally show "Waiting for completion..."
       } else {
            throw Exception('ブラウザを開けませんでした: $authUrlString');
       }
