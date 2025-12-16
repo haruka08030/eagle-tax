@@ -2,7 +2,7 @@ import { corsHeaders } from './cors.ts';
 
 export const errorResponse = (message: string, status = 500, extra: Record<string, any> = {}) => {
     return new Response(
-        JSON.stringify({ error: message, ...extra }),
+        JSON.stringify({ ...extra, error: message }),
         {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status,

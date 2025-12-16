@@ -55,8 +55,10 @@ class DashboardSummaryCard extends StatelessWidget {
                 child: _buildSummaryItem(
                   context,
                   label: 'Analyzed Sales (12mo)',
-                  value: NumberFormat.currency(locale: 'en_US', symbol: '\$')
-                      .format(totalAnalyzedSales),
+                  value: NumberFormat.currency(
+                      locale: Localizations.localeOf(context).toString(),
+                      symbol: '\$',
+                    ).format(totalAnalyzedSales),
                   icon: Icons.attach_money_rounded,
                   color: const Color(0xFF4F46E5), // Indigo
                   unit: 'Total',

@@ -12,14 +12,18 @@ class Profile {
   });
 
   factory Profile.fromJson(Map<String, dynamic> json) {
-    return Profile(
-      id: json['id'] as String,
-      shopifyShopName: json['shopify_shop_name'] as String?,
-      shopifyAccessToken: json['shopify_access_token'] as String?,
-      createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
-          : null,
-    );
+    try {
+      return Profile(
+        id: json['id'] as String,
+        shopifyShopName: json['shopify_shop_name'] as String?,
+        shopifyAccessToken: json['shopify_access_token'] as String?,
+        createdAt: json['created_at'] != null
+            ? DateTime.parse(json['created_at'] as String)
+            : null,
+      );
+    } catch (e) {
+      throw FormatException('Invalid JSON format for Profile: $e');
+    }
   }
 
   Map<String, dynamic> toJson() {

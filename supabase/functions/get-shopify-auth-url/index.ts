@@ -72,7 +72,7 @@ serve(async (req: Request) => {
 
     } catch (error) {
         console.error('Error generating auth URL:', error);
-        return errorResponse(error instanceof Error ? error.message : 'Unknown error');
+        return errorResponse(error instanceof Error ? error.message : 'Unknown error', 500);
     }
 });
 

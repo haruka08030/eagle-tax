@@ -8,10 +8,11 @@ export const createAuthenticatedClient = (req: Request) => {
         throw new Error('Missing required environment variables: SUPABASE_URL or SUPABASE_ANON_KEY');
     }
 
+    const authHeader = req.headers.get('Authorization');
     return createClient(
         supabaseUrl,
         supabaseAnonKey,
-        { global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } } }
+        authHeader ? { global: { headers: { Authorization: authHeader } } } : {}
     );
 };
 

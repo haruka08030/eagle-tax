@@ -58,8 +58,13 @@ serve(async (req: Request) => {
     // crypto.subtle.verify takes the signature as a BufferSource.
 
     // Helper to convert hex string to Uint8Array
-    const fromHexString = (hexString: string) =>
-      new Uint8Array(hexString.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+    const fromHexString = (hexString: string) => {
+      const matches = hexString.match(/.{1,2}/g);
+      if (!matches) {
+        throw new Error('Invalid HMAC format');
+      }
+      return new Uint8Array(matches.map(byte => parseInt(byte, 16)));
+    };
 
     const signature = fromHexString(hmac);
 

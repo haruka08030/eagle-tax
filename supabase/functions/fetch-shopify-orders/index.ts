@@ -48,15 +48,23 @@ serve(async (req: Request) => {
       return errorResponse('Shopify integration not complete. Missing token or shop name.', 400)
     }
 
-    const { pageUrl, startDate, endDate } = await req.json().catch(() => ({ pageUrl: null, startDate: null, endDate: null }));
+    let pageUrl = null, startDate = null, endDate = null;
+    try {
+      const body = await req.json();
+      ({ pageUrl, startDate, endDate } = body);
+    } catch (error) {
+      // If there's no body or it's empty, that's fine - we'll use defaults
+      // But if it's malformed JSON, we should log it
+      if (error instanceof SyntaxError) {
+        console.warn('Malformed JSON in request body, using defaults');
+      }
+    }
 
     // Validate pageUrl if provided
     if (pageUrl) {
       try {
         const parsedUrl = new URL(pageUrl);
-        const isValidShopifyDomain =
-          parsedUrl.hostname === `${shopName}.myshopify.com` ||
-          parsedUrl.hostname.endsWith('.myshopify.com');
+        const isValidShopifyDomain = parsedUrl.hostname === `${shopName}.myshopify.com`;
 
         if (!isValidShopifyDomain) {
           return errorResponse('Invalid Shopify URL provided', 400);
