@@ -1,6 +1,7 @@
 import { serve } from 'http/server';
-import { createClient } from '@supabase/supabase-js';
+
 import { corsHeaders } from '../_shared/cors.ts';
+import { createAdminClient } from '../_shared/supabase-client.ts';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -47,50 +48,41 @@ serve(async (req: Request) => {
     }
 
     const { access_token } = await tokenResponse.json();
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    if (access_token) {
-      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-
-      if (!supabaseUrl || !supabaseServiceKey) {
-        throw new Error('Missing Supabase configuration in environment variables.');
-      }
-
-      const supabaseAdmin = createClient(
-        supabaseUrl,
-        supabaseServiceKey,
-      );
-
-      const authHeader = req.headers.get('Authorization');
-      if (!authHeader) {
-        throw new Error('Missing Authorization header');
-      }
-      const { data: { user } } = await supabaseAdmin.auth.getUser(authHeader.replace('Bearer ', ''));
-
-      if (!user) {
-        throw new Error('Could not get user from JWT');
-      }
-
-      const { error: updateError } = await supabaseAdmin
-        .from('profiles')
-        .upsert({
-          id: user.id,
-          shopify_shop_name: shop,
-          shopify_access_token: access_token,
-          updated_at: new Date().toISOString(),
-        });
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      return new Response(JSON.stringify({ message: 'Shopify store connected successfully.' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      });
-
-    } else {
+    if (!access_token) {
       throw new Error('Failed to retrieve access token');
     }
+
+    const supabaseAdmin = createAdminClient();
+
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      throw new Error('Missing Authorization header');
+    }
+    const { data: { user } } = await supabaseAdmin.auth.getUser(authHeader.replace('Bearer ', ''));
+
+    if (!user) {
+      throw new Error('Could not get user from JWT');
+    }
+
+    const { error: updateError } = await supabaseAdmin
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        shopify_shop_name: shop,
+        shopify_access_token: access_token,
+        updated_at: new Date().toISOString(),
+      });
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    return new Response(JSON.stringify({ message: 'Shopify store connected successfully.' }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 200,
+    });
+
+
 
   } catch (error: any) {
     const err = error;
