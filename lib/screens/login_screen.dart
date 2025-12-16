@@ -40,7 +40,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = 'サインインに失敗しました。メールアドレスとパスワードを確認してください。';
       });
     } finally {
       if (mounted) {
@@ -75,7 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _errorMessage = e.toString();
       });
     } finally {
-       if (mounted) {
+      if (mounted) {
         setState(() {
           _isLoading = false;
         });
@@ -111,6 +111,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         if (value == null || value.isEmpty) {
                           return 'メールアドレスを入力してください';
                         }
+                        final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+                        if (!emailRegex.hasMatch(value)) {
+                          return '有効なメールアドレスを入力してください';
+                        }
                         return null;
                       },
                     ),
@@ -122,6 +126,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       validator: (value) {
                         if (value == null || value.isEmpty) {
                           return 'パスワードを入力してください';
+                        }
+                        if (value.length < 6) {
+                          return 'パスワードは6文字以上で入力してください';
                         }
                         return null;
                       },
@@ -159,4 +166,3 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
-}
