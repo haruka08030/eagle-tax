@@ -73,14 +73,14 @@ class StateResultCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // --- データ抽出 ---
-    final isDanger = result['isDanger'] as bool;
-    final stateCode = result['state'] as String;
-    final stateName = result['stateName'] as String;
-    final logicType = result['logicType'] as String;
+    final isDanger = result['isDanger'] as bool? ?? false;
+    final stateCode = result['state'] as String? ?? '';
+    final stateName = result['stateName'] as String? ?? 'Unknown';
+    final logicType = result['logicType'] as String? ?? '';
     final txnLimit = result['txnLimit'] as int?;
     final salesLimit = result['salesLimit'] as int?;
-    final totalSales = result['total'] as double;
-    final txnCount = result['txnCount'] as int;
+    final totalSales = (result['total'] as num?)?.toDouble() ?? 0.0;
+    final txnCount = (result['txnCount'] as num?)?.toInt() ?? 0;
     final periodStartDate = result['periodStartDate'] as DateTime?;
     final lastUpdated = result['lastUpdated'] as DateTime?;
 

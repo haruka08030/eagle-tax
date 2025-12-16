@@ -65,13 +65,15 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   }
 
   void _handleDeepLink(Uri uri) {
-    if (uri.toString().contains('code=') && uri.toString().contains('shop=')) {
+   final code = uri.queryParameters['code'];
+   final shop = uri.queryParameters['shop'];
+   if (code != null && shop != null) {
       debugPrint('Shopify callback detected: $uri');
       // Navigate to ConnectShopifyScreen to handle the auth code
       WidgetsBinding.instance.addPostFrameCallback((_) {
          Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const ConnectShopifyScreen()),
+          MaterialPageRoute(builder: (context) => const ConnectShopifyScreen(authCode: code, shop: shop)),
         ).then((result) {
            if (result == true && mounted) {
              _initServices(); // Refresh profile after successful connection

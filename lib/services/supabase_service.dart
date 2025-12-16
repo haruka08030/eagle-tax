@@ -37,7 +37,10 @@ class SupabaseService {
     );
 
     if (response.status >= 200 && response.status < 300) {
-      return response.data as Map<String, dynamic>;
+      if (response.data is Map<String, dynamic>) {
+        return response.data as Map<String, dynamic>;
+      }
+      throw Exception('Invalid response format from server');
     } else {
       final errorMsg = response.data is Map 
           ? response.data['error'] ?? 'Server error' 

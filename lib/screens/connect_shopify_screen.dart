@@ -15,6 +15,7 @@ class ConnectShopifyScreen extends StatefulWidget {
 
 class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with WidgetsBindingObserver {
   bool _isLoading = false;
+  bool _isProcessingCallback = false;
   String? _errorMessage;
   String? _oauthState; // Store OAuth state for CSRF protection
   final _shopNameController = TextEditingController();
@@ -44,9 +45,7 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
     if (state == AppLifecycleState.resumed) {
       // Give some time for the deep link to be processed
       Future.delayed(const Duration(milliseconds: 1500), () {
-        if (mounted && _isLoading && _errorMessage == null) {
-          // If still loading but no status message set (meaning _handleRedirect hasn't updated it),
-          // assume user cancelled or returned without auth.
+        if (mounted && _isLoading && !_isProcessingCallback) {
           setState(() {
             _isLoading = false;
           });
@@ -134,10 +133,13 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with Widget
     
     // Call the backend to generate the auth URL
     _supabaseService.getShopifyAuthUrl(
+    // Use actual deep link scheme configured for the app
+    const redirectUrl = String.fromEnvironment('SHOPIFY_REDIRECT_URL', 
+        defaultValue: 'eagletax://shopify-callback');
+    _supabaseService.getShopifyAuthUrl(
       shopName,
-      'http://localhost:3000/',
+      redirectUrl,
     ).then((data) async {
-      if (!mounted) return;
 
       final authUrlString = data['authUrl'] as String;
       final state = data['state'] as String?;
