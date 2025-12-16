@@ -1,19 +1,23 @@
+import 'package:eagle_tax/screens/auth_gate.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'screens/tax_monitor_screen.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // 環境変数を読み込み
+
   await dotenv.load(fileName: ".env");
 
-  // Supabaseを初期化
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL']!,
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
+
+  // Initialize date formatting for 'ja' locale
+  await initializeDateFormatting('ja', null);
+  Intl.defaultLocale = 'ja';
   
   runApp(const EagleTaxApp());
 }
@@ -26,10 +30,10 @@ class EagleTaxApp extends StatelessWidget {
     return MaterialApp(
       title: 'Eagle Tax MVP',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueAccent),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4F46E5)),
         useMaterial3: true,
       ),
-      home: const TaxMonitorScreen(),
+      home: const AuthGate(),
     );
   }
 }
