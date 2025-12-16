@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:eagle_tax/models/profile.dart';
+import 'package:app_links/app_links.dart';
 import 'package:eagle_tax/screens/connect_shopify_screen.dart';
 import 'package:eagle_tax/services/profile_service.dart';
 import 'package:eagle_tax/widgets/dashboard_summary_card.dart';
@@ -48,6 +49,36 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   void initState() {
     super.initState();
     _initServices();
+    _checkDeepLink();
+  }
+
+  Future<void> _checkDeepLink() async {
+    final appLinks = AppLinks();
+    try {
+      final uri = await appLinks.getInitialLink();
+      if (uri != null) {
+        _handleDeepLink(uri);
+      }
+    } catch (e) {
+      debugPrint('Deep link error: $e');
+    }
+  }
+
+  void _handleDeepLink(Uri uri) {
+    if (uri.toString().contains('code=') && uri.toString().contains('shop=')) {
+      debugPrint('Shopify callback detected: $uri');
+      // Navigate to ConnectShopifyScreen to handle the auth code
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+         Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const ConnectShopifyScreen()),
+        ).then((result) {
+           if (result == true && mounted) {
+             _initServices(); // Refresh profile after successful connection
+           }
+        });
+      });
+    }
   }
   
   Future<void> _initServices() async {
@@ -239,10 +270,18 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     do {
       pageCount++;
 
+      // Format dates for Shopify API (ISO 8601)
+      // Start date: 00:00:00
+      final startIso = _startDate.toIso8601String();
+      // End date: 23:59:59 of the selected end date
+      final endIso = DateTime(_endDate.year, _endDate.month, _endDate.day, 23, 59, 59).toIso8601String();
+
       final response = await Supabase.instance.client.functions.invoke(
         'fetch-shopify-orders',
         body: {
           if (nextPageUrl != null) 'pageUrl': nextPageUrl,
+          if (nextPageUrl == null) 'startDate': startIso,
+          if (nextPageUrl == null) 'endDate': endIso,
         },
       );
 

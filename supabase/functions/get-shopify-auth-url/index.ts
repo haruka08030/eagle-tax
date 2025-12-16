@@ -35,8 +35,8 @@ serve(async (req: Request) => {
         const clientId = Deno.env.get('SHOPIFY_API_KEY');
         const envRedirectUri = Deno.env.get('SHOPIFY_REDIRECT_URI');
 
-        // Always use server-configured redirect URI for security
-        const redirectUri = envRedirectUri;
+        // Allow client to override redirect URI for local development (e.g. localhost:3000)
+        const redirectUri = clientRedirectUri || envRedirectUri;
 
         // Default scopes if not set in environment
         const scopes = Deno.env.get('SHOPIFY_SCOPES') || 'read_orders';

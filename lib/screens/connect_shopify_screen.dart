@@ -12,7 +12,7 @@ class ConnectShopifyScreen extends StatefulWidget {
   State<ConnectShopifyScreen> createState() => _ConnectShopifyScreenState();
 }
 
-class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
+class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> with WidgetsBindingObserver {
   bool _isLoading = false;
   String? _errorMessage;
   final _shopNameController = TextEditingController();
@@ -24,14 +24,32 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initDeepLinkListener();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _linkSubscription?.cancel();
     _shopNameController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Give some time for the deep link to be processed
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        if (mounted && _isLoading && _errorMessage == null) {
+          // If still loading but no status message set (meaning _handleRedirect hasn't updated it),
+          // assume user cancelled or returned without auth.
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      });
+    }
   }
 
   Future<void> _initDeepLinkListener() async {
@@ -39,7 +57,7 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
 
     // Listen for incoming deep links
     _linkSubscription = _appLinks.uriLinkStream.listen((Uri? uri) {
-      if (uri != null) {
+      if (mounted && uri != null) {
         _handleRedirect(uri);
       }
     }, onError: (err) {
@@ -48,9 +66,7 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
   }
 
   Future<void> _handleRedirect(Uri uri) async {
-    // Check if this is the Shopify callback
-    // The path should match your configured redirect URI path, e.g., /shopify-callback
-    // Or you can check specific query params.
+    if (!mounted) return;
     if (!uri.toString().contains('code=') || !uri.toString().contains('shop=')) {
         return;
     }

@@ -48,7 +48,7 @@ serve(async (req: Request) => {
       return errorResponse('Shopify integration not complete. Missing token or shop name.', 400)
     }
 
-    const { pageUrl } = await req.json().catch(() => ({ pageUrl: null }));
+    const { pageUrl, startDate, endDate } = await req.json().catch(() => ({ pageUrl: null, startDate: null, endDate: null }));
 
     // Validate pageUrl if provided
     if (pageUrl) {
@@ -66,8 +66,23 @@ serve(async (req: Request) => {
       }
     }
 
-    const url = pageUrl ||
-      `https://${shopName}.myshopify.com/admin/api/2024-01/orders.json?status=any&limit=250`
+    let url = pageUrl;
+    if (!url) {
+      const baseUrl = `https://${shopName}.myshopify.com/admin/api/2024-01/orders.json`;
+      const params = new URLSearchParams();
+      params.append('status', 'any');
+      params.append('limit', '250');
+      params.append('fields', 'id,created_at,total_price,shipping_address'); // Optimization: fetch only needed fields
+
+      if (startDate) {
+        params.append('created_at_min', startDate);
+      }
+      if (endDate) {
+        params.append('created_at_max', endDate);
+      }
+
+      url = `${baseUrl}?${params.toString()}`;
+    }
 
     console.log(`📦 Fetching orders from: ${url}`)
 
