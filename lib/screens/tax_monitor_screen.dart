@@ -10,6 +10,8 @@ import '../services/auth_service.dart';
 import '../services/supabase_service.dart';
 import '../services/shopify_service.dart';
 import '../widgets/state_result_card.dart';
+import 'package:countries_world_map/countries_world_map.dart';
+import 'package:countries_world_map/data/maps/north_america/united_states.dart';
 
 class TaxMonitorScreen extends StatefulWidget {
   const TaxMonitorScreen({super.key});
@@ -43,6 +45,9 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   int _atRiskCount = 0;
   int _warningCount = 0;
   double _totalAnalyzedSales = 0;
+  
+  // View mode
+  bool _showMap = false;
 
   @override
   void initState() {
@@ -251,8 +256,13 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
 
       final createdAt = order['created_at'];
       if (createdAt != null) {
-        final orderDate = DateTime.parse(createdAt);
-        if (orderDate.isBefore(startDate) || orderDate.isAfter(inclusiveEndDate)) {
+        try {
+          final orderDate = DateTime.parse(createdAt);
+          if (orderDate.isBefore(startDate) || orderDate.isAfter(inclusiveEndDate)) {
+            continue;
+          }
+        } catch (e) {
+          debugPrint('❌ Invalid date format for order: $createdAt');
           continue;
         }
       }
@@ -291,28 +301,28 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
       totalSalesSum += totalSales; // 全州の売上合計
 
       StateThreshold? threshold = _stateThresholds
-          .where((st) => st.code == stateCode)
-          .firstOrNull;
-
-      if (threshold == null) continue;
-
       bool isDanger = threshold.checkNexus(
         totalSales: totalSales,
         transactionCount: txnCount,
       );
       
-      if (isDanger) {
-        atRisk++;
-      } else {
-        // Warning判定 (80%超え)
-        bool isWarning = _checkWarning(threshold, totalSales, txnCount);
+      if (isDanger) atRisk++;
+
+      bool isWarning = false;
+      if (!isDanger) {
+        isWarning = _checkWarning(threshold, totalSales, txnCount);
+        if (isWarning) warning++;
+      }
+      bool isWarning = false;
+      if (!isDanger) {
+        isWarning = _checkWarning(threshold, totalSales, txnCount);
         if (isWarning) warning++;
       }
 
       tempResults.add({
         'state': stateCode, 'stateName': threshold.name, 'total': totalSales,
         'txnCount': txnCount, 'salesLimit': threshold.salesThreshold, 'txnLimit': threshold.txnThreshold,
-        'logicType': threshold.logicType, 'isDanger': isDanger, 'periodStartDate': startDate, 'lastUpdated': updateTime,
+        'logicType': threshold.logicType, 'isDanger': isDanger, 'isWarning': isWarning, 'periodStartDate': startDate, 'lastUpdated': updateTime,
       });
     }
 
@@ -330,9 +340,9 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
   }
   
   bool _checkWarning(StateThreshold threshold, double currentSales, int currentTxn) {
-    if (threshold.logicType == 'NONE') return false;
-    
-    bool salesWarning = threshold.salesThreshold != null && 
+    if (threshold.logicType == 'AND') {
+      // AND logic: warn only if both thresholds are approaching (>=80%)
+      return salesWarning && txnWarning;
                       currentSales >= threshold.salesThreshold! * 0.8;
     bool txnWarning = threshold.txnThreshold != null && 
                     currentTxn >= threshold.txnThreshold! * 0.8;
@@ -346,6 +356,73 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
     }
   }
 
+
+  Widget _buildMap() {
+    Map<String, Color> stateColors = {};
+    for (var result in _results) {
+      final stateCode = (result['state'] as String).toLowerCase();
+      Color color = Colors.blue.shade100; // Safe
+      
+      if (result['isDanger'] == true) {
+        color = Colors.red.shade400;
+      } else if (result['isWarning'] == true) {
+        color = Colors.orange.shade300;
+      }
+      
+      stateColors[stateCode] = color;
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: Column(
+            children: [
+              const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Text('危険な州は赤、要注意はオレンジで表示されます。州をタップして詳細を確認できます。', style: TextStyle(color: Colors.grey))
+              ),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 500),
+                child: SimpleMap(
+                  instructions: SMapUnitedStates.instructions,
+                  defaultColor: Colors.grey.shade200,
+                  colors: stateColors,
+                  callback: (id, name, tapDetails) {
+                      String normalizedId = id.toString().toUpperCase();
+                      if (normalizedId.startsWith('US-')) {
+                        normalizedId = normalizedId.substring(3);
+                      }
+                      
+                      final result = _results.firstWhere(
+                        (r) => r['state'] == normalizedId, 
+                        orElse: () => {},
+                      );
+                      
+                      if (result.isNotEmpty) {
+                         final sales = NumberFormat.currency(locale: 'en_US', symbol: '\$').format(result['total']);
+                         final txns = result['txnCount'];
+                         ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                         ScaffoldMessenger.of(context).showSnackBar(
+                           SnackBar(
+                             content: Text('${result['stateName']} ($normalizedId)\n売上: $sales\n取引数: $txns件'),
+                             duration: const Duration(seconds: 3),
+                           )
+                         );
+                      } else {
+                         ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                         ScaffoldMessenger.of(context).showSnackBar(
+                           SnackBar(content: Text('$name ($normalizedId): データなし'))
+                         );
+                      }
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -472,10 +549,39 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
+            
+            // View Toggle
+             Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment<bool>(
+                      value: false,
+                      label: Text('リスト'),
+                      icon: Icon(Icons.list),
+                    ),
+                    ButtonSegment<bool>(
+                      value: true,
+                      label: Text('マップ'),
+                      icon: Icon(Icons.map),
+                    ),
+                  ],
+                  selected: {_showMap},
+                  onSelectionChanged: (Set<bool> newSelection) {
+                    setState(() {
+                      _showMap = newSelection.first;
+                    });
+                  },
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 10),
             
             // リストタイトル
-            if (_results.isNotEmpty)
+            if (_results.isNotEmpty && !_showMap)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
                 child: Text('州ごとの詳細レポート', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey)),
@@ -486,12 +592,14 @@ class _TaxMonitorScreenState extends State<TaxMonitorScreen> {
                   ? const Center(child: Text('表示する州データがありません。'))
                   : _results.isEmpty && !_isLoading
                       ? const Center(child: Text('上のボタンを押して診断を開始してください。'))
-                      : ListView.builder(
-                          itemCount: _results.length,
-                          itemBuilder: (context, index) {
-                            return StateResultCard(result: _results[index]);
-                          },
-                        ),
+                      : _showMap 
+                          ? _buildMap()
+                          : ListView.builder(
+                              itemCount: _results.length,
+                              itemBuilder: (context, index) {
+                                return StateResultCard(result: _results[index]);
+                              },
+                            ),
             ),
           ],
         ),

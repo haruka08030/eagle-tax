@@ -46,4 +46,5 @@ app.*.map.json
 
 # 環境変数
 .env
+
 supabase/.temp/

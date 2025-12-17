@@ -17,6 +17,7 @@ dependencies:
   intl: ^0.20.2
   shared_preferences: ^2.5.4
   webview_flutter: ^4.13.0
+  countries_world_map: ^1.2.3
 
 dev_dependencies:
   flutter_test:

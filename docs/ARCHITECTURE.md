@@ -135,15 +135,6 @@ Flutter App
 
 **注意**: 将来的には、Shopify認証情報をSupabaseのシークレットに移行し、クライアント側から完全に削除することを推奨します。
 
-### CORS対策
-
-**問題**: Shopify Admin APIはブラウザからの直接アクセスを許可していない
-
-**解決策**: Supabase Edge Functionsを使用
-- サーバーサイドでAPIを呼び出し
-- CORSヘッダーを適切に設定
-- クライアントからはEdge Functionのみを呼び出し
-
 ### データの流れ
 
 ```
@@ -157,28 +148,6 @@ Flutter App
   └─► Supabase PostgreSQL
         └─► 州データ
 ```
-
----
-
-## 📊 パフォーマンス最適化
-
-### 1. ページネーション
-
-- **問題**: 大量の注文データを一度に取得すると遅い
-- **解決**: 250件ずつ取得し、順次処理
-- **待機時間**: 500ms（API Rate Limit対策）
-
-### 2. 期間フィルタリング
-
-- **問題**: 全期間のデータを処理すると遅い
-- **解決**: 直近12ヶ月のみを対象
-- **効果**: 処理時間を大幅に短縮
-
-### 3. Edge Functions
-
-- **コールドスタート**: 1-2秒
-- **ウォームスタート**: 100-300ms
-- **スケーリング**: 自動
 
 ---
 
@@ -224,59 +193,6 @@ testWidgets('Fetch orders from Edge Function', (tester) async {
 
 ---
 
-## 🚀 デプロイメント
-
-### 開発環境
-
-```bash
-# ローカルでSupabaseを起動
-supabase start
-
-# Edge Functionをローカルで実行
-supabase functions serve fetch-shopify-orders
-
-# Flutterアプリを実行
-flutter run -d chrome
-```
-
-### 本番環境
-
-```bash
-# Edge Functionをデプロイ
-supabase functions deploy fetch-shopify-orders
-
-# Flutterアプリをビルド
-flutter build web
-
-# Webホスティングにデプロイ（例: Vercel, Netlify）
-```
-
----
-
-## 📈 スケーラビリティ
-
-### 現在の制限
-
-- **Shopify API**: 2リクエスト/秒
-- **Supabase Edge Functions**: フェアユース
-- **PostgreSQL**: 無料プランで十分
-
-### 将来の拡張
-
-1. **マルチテナント対応**
-   - ユーザーごとにShopify認証情報を保存
-   - Row Level Security (RLS) で権限管理
-
-2. **バックグラウンド処理**
-   - 定期的に注文データを取得
-   - キャッシュして高速化
-
-3. **通知機能**
-   - Nexus基準に達したら通知
-   - メール、Slack、Webhookなど
-
----
-
 ## 🔧 メンテナンス
 
 ### ログ監視
@@ -288,52 +204,3 @@ supabase functions logs fetch-shopify-orders --follow
 # エラーのみ表示
 supabase functions logs fetch-shopify-orders --filter error
 ```
-
-### データベースメンテナンス
-
-```sql
--- 州データの更新
-UPDATE states 
-SET sales_threshold = 600000 
-WHERE code = 'NY';
-
--- 新しい州の追加
-INSERT INTO states (code, name, sales_threshold, txn_threshold, logic_type)
-VALUES ('XX', 'New State', 500000, 100, 'OR');
-```
-
----
-
-## 📚 技術スタック
-
-| レイヤー | 技術 | 用途 |
-|---------|------|------|
-| **Frontend** | Flutter (Web) | UIとクライアントロジック |
-| **Backend** | Supabase Edge Functions | APIプロキシ |
-| **Database** | PostgreSQL (Supabase) | 州データ保存 |
-| **API** | Shopify Admin API | 注文データ取得 |
-| **Language** | Dart, TypeScript | アプリとEdge Function |
-| **Hosting** | Vercel / Netlify | Webホスティング |
-
----
-
-## 🎯 次のステップ
-
-1. **ユーザー認証**: Supabase Authを使用
-2. **マルチテナント**: 複数のShopifyストアに対応
-3. **ダッシュボード**: 履歴データの可視化
-4. **アラート**: 基準超過時の自動通知
-5. **エクスポート**: CSV/PDFレポート生成
-
----
-
-## 📝 まとめ
-
-Eagle Taxは、Supabase Edge Functionsを活用することで:
-
-✅ **セキュア**: アクセストークンを隠蔽  
-✅ **高速**: Edge Functionsで低レイテンシ  
-✅ **スケーラブル**: 自動スケーリング  
-✅ **保守性**: クリーンなアーキテクチャ  
-
-を実現しています。

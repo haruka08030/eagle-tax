@@ -19,7 +19,6 @@ serve(async (req: Request) => {
       throw new Error('Invalid shop domain format');
     }
 
-    // These should be set in your Supabase project's environment variables
     const shopifyApiKey = Deno.env.get('SHOPIFY_API_KEY');
     const shopifyApiSecret = Deno.env.get('SHOPIFY_API_SECRET_KEY');
 
@@ -27,7 +26,6 @@ serve(async (req: Request) => {
       throw new Error('Missing Shopify API credentials in environment variables.');
     }
 
-    // 1. Exchange the authorization code for a permanent access token
     const tokenUrl = `https://${shop}/admin/oauth/access_token`;
     const tokenResponse = await fetch(tokenUrl, {
       method: 'POST',
@@ -70,12 +68,21 @@ serve(async (req: Request) => {
         throw new Error('Could not get user from JWT');
       }
 
+      // Store the access token in Supabase Vault
+      const { error: rpcError } = await supabaseAdmin.rpc('store_secret', {
+        name: `shopify_access_token_${user.id}`,
+        secret: access_token,
+      });
+
+      if (rpcError) {
+        throw rpcError;
+      }
+
       const { error: updateError } = await supabaseAdmin
         .from('profiles')
         .upsert({
           id: user.id,
           shopify_shop_name: shop,
-          shopify_access_token: access_token,
           updated_at: new Date().toISOString(),
         });
 
@@ -94,8 +101,7 @@ serve(async (req: Request) => {
 
   } catch (error: any) {
     const err = error;
-    // Determine appropriate status code based on error type
-    let status = 500; // Default to server error
+    let status = 500;
     let message = 'An internal error occurred';
 
     if (err.message && (err.message.includes('Missing required parameters') ||

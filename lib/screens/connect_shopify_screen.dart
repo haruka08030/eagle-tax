@@ -11,71 +11,87 @@ class ConnectShopifyScreen extends StatefulWidget {
 }
 
 class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
-  late final WebViewController _controller;
-  bool _isLoading = true;
+  final _formKey = GlobalKey<FormState>();
+  final _shopNameController = TextEditingController();
+  WebViewController? _controller;
+  bool _isLoading = false;
   String? _errorMessage;
+  bool _showWebView = false;
 
-  // IMPORTANT: This must match one of the "Allowed redirection URL(s)" in your Shopify App settings
   final String _redirectUri = dotenv.env['SHOPIFY_REDIRECT_URI'] ?? '';
-  final String _scopes = 'read_orders';
 
   @override
-  void initState() {
-    super.initState();
+  void dispose() {
+    _shopNameController.dispose();
+    super.dispose();
+  }
 
-    final shopifyApiKey = dotenv.env['SHOPIFY_API_KEY'];
-    final shopName = dotenv.env['SHOPIFY_SHOP_NAME']; // In a real app, you'd ask the user for this
-
-    if (shopifyApiKey == null || shopName == null) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Shopify APIキーまたはショップ名が.envファイルに設定されていません。';
-      });
+  Future<void> _getShopifyAuthUrlAndLoadWebView() async {
+    if (!_formKey.currentState!.validate()) {
       return;
     }
 
-    final authUrl = Uri.https(
-      '${shopName}.myshopify.com',
-      '/admin/oauth/authorize',
-      {
-        'client_id': shopifyApiKey,
-        'scope': _scopes,
-        'redirect_uri': _redirectUri,
-      },
-    ).toString();
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
 
-    _controller = WebViewController()
-      // JavaScript required for Shopify OAuth flow
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (String url) {
-            setState(() {
-              _isLoading = true;
-              _errorMessage = null;
-            });
-          },
-          onPageFinished: (String url) {
-            setState(() {
-              _isLoading = false;
-            });
-          },
-          onNavigationRequest: (NavigationRequest request) {
-            if (request.url.startsWith(_redirectUri)) {
-              _handleRedirect(request.url);
-              return NavigationDecision.prevent; // Stop the redirect
-            }
-            return NavigationDecision.navigate;
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse(authUrl));
+    try {
+      final shopName = _shopNameController.text.trim();
+      final response = await Supabase.instance.client.functions.invoke(
+        'get-shopify-auth-url',
+        body: {'shop_name': shopName},
+      );
+
+      if (response.status != 200) {
+        throw Exception('認証URLの取得に失敗しました: ${response.data}');
+      }
+
+      final authUrl = response.data['authUrl'];
+
+      final controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onPageStarted: (String url) {
+              setState(() {
+                _isLoading = true;
+                _errorMessage = null;
+              });
+            },
+            onPageFinished: (String url) {
+              setState(() {
+                _isLoading = false;
+              });
+            },
+            onNavigationRequest: (NavigationRequest request) {
+              if (request.url.startsWith(_redirectUri)) {
+                _handleRedirect(request.url);
+                return NavigationDecision.prevent;
+              }
+              return NavigationDecision.navigate;
+            },
+          ),
+        )
+        ..loadRequest(Uri.parse(authUrl));
+
+      setState(() {
+        _controller = controller;
+        _showWebView = true;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = e.toString();
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _handleRedirect(String url) async {
+    String? _statusMessage;
     setState(() {
       _isLoading = true;
-      _errorMessage = '認証情報を確認しています...';
+      _statusMessage = '認証情報を確認しています...';
     });
 
     try {
@@ -96,17 +112,15 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
         final errorMsg = response.data is Map ? response.data['error'] ?? 'Unknown error' : 'Unknown error';
         throw Exception('Edge Functionの呼び出しに失敗しました: $errorMsg');
       }
-      
-      // On success, pop the screen
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Shopifyストアが正常に接続されました！')),
         );
-        Navigator.of(context).pop(true); // Return true to signal success
+        Navigator.of(context).pop(true);
       }
-
     } catch (e) {
-      if(mounted) {
+      if (mounted) {
         setState(() {
           _isLoading = false;
           _errorMessage = e.toString();
@@ -119,20 +133,92 @@ class _ConnectShopifyScreenState extends State<ConnectShopifyScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Shopifyと連携')),
-      body: _errorMessage != null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
-              ),
-            )
-          : Stack(
-              children: [
-                WebViewWidget(controller: _controller),
-                if (_isLoading)
-                  const Center(child: CircularProgressIndicator()),
-              ],
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _errorMessage = null;
+                    _isLoading = false;
+                    _showWebView = false;
+                    _shopNameController.clear();
+                  });
+                },
+                child: const Text('やり直す'),
+              )
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_showWebView && _controller != null) {
+      return Stack(
+        children: [
+          WebViewWidget(controller: _controller!),
+          if (_isLoading)
+            const Center(child: CircularProgressIndicator()),
+        ],
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Shopifyストアのドメイン名を入力してください',
+              style: Theme.of(context).textTheme.titleLarge,
+              textAlign: TextAlign.center,
             ),
+            const SizedBox(height: 8),
+            Text(
+              '例: "your-store.myshopify.com" の場合は "your-store" と入力',
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            TextFormField(
+              controller: _shopNameController,
+              decoration: const InputDecoration(
+                labelText: 'ストア名',
+                border: OutlineInputBorder(),
+                suffixText: '.myshopify.com',
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'ストア名を入力してください';
+                }
+                if (value.contains('.')) {
+                  return '".myshopify.com" より前の部分のみ入力してください';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _isLoading ? null : _getShopifyAuthUrlAndLoadWebView,
+              child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('連携する'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

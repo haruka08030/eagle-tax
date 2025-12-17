@@ -1,13 +1,6 @@
-// Supabase Edge Function: fetch-shopify-orders
-// Shopify Admin APIから注文データを取得し、CORSとセキュリティの問題を解決
-
-// @deno-types="https://deno.land/std@0.168.0/http/server.ts"
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
+import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { corsHeaders } from '../_shared/cors.ts';
 
 interface ShopifyOrder {
     id: number;
@@ -24,61 +17,104 @@ interface ShopifyResponse {
 }
 
 serve(async (req: Request) => {
-    // Handle CORS preflight requests
     if (req.method === 'OPTIONS') {
-        return new Response('ok', { headers: corsHeaders })
+        return new Response('ok', { headers: corsHeaders });
     }
 
     try {
-        // リクエストボディから必要な情報を取得
-        const { shopName, accessToken, pageUrl } = await req.json()
+        let pageUrl: string | undefined;
+        try {
+            const body = await req.json();
+            pageUrl = body.pageUrl;
+        } catch {
+            // No body or invalid JSON - proceed without pageUrl
+        }
+        const supabaseUrl = Deno.env.get('SUPABASE_URL');
+        const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-        if (!shopName || !accessToken) {
-            throw new Error('shopName and accessToken are required')
+        if (!supabaseUrl || !supabaseServiceKey) {
+            throw new Error('Missing Supabase configuration in environment variables.');
         }
 
-        // Shopify APIのURLを構築
+        const supabaseAdmin = createClient(
+            supabaseUrl,
+            supabaseServiceKey,
+        );
+
+        const authHeader = req.headers.get('Authorization');
+        if (!authHeader) {
+            throw new Error('Missing Authorization header');
+        }
+        const { data: { user } } = await supabaseAdmin.auth.getUser(authHeader.replace('Bearer ', ''));
+
+        if (!user) {
+            throw new Error('Could not get user from JWT');
+        }
+
+        const { data: profile, error: profileError } = await supabaseAdmin
+            .from('profiles')
+            .select('shopify_shop_name')
+            .eq('id', user.id)
+            .single();
+
+        if (profileError || !profile) {
+            throw new Error('Could not retrieve Shopify shop name from profile');
+        }
+
+        const { data: accessToken, error: rpcError } = await supabaseAdmin.rpc('get_secret', {
+            name_in: `shopify_access_token_${user.id}`,
+        });
+
+        if (rpcError || !accessToken) {
+            throw new Error('Could not retrieve Shopify access token');
+        }
+
+        const shopifyDomain = `${profile.shopify_shop_name}.myshopify.com`;
         const url = pageUrl ||
-            `https://${shopName}.myshopify.com/admin/api/2024-01/orders.json?status=any&limit=250`
+            `https://${shopifyDomain}/admin/api/2024-01/orders.json?status=any&limit=250`;
 
-        console.log(`📦 Fetching orders from: ${url}`)
+        // Validate pageUrl to prevent SSRF
+        if (pageUrl) {
+            const parsedUrl = new URL(pageUrl);
+            if (parsedUrl.hostname !== shopifyDomain) {
+                throw new Error('Invalid page URL: must be from your Shopify store');
+            }
+        }
 
-        // Shopify APIにリクエスト
+        console.log(`📦 Fetching orders from: ${url}`);
+
         const response = await fetch(url, {
             headers: {
                 'X-Shopify-Access-Token': accessToken,
                 'Content-Type': 'application/json',
             },
-        })
+        });
 
         if (!response.ok) {
-            throw new Error(`Shopify API Error: ${response.status} ${response.statusText}`)
+            throw new Error(`Shopify API Error: ${response.status} ${response.statusText}`);
         }
 
-        const data: ShopifyResponse = await response.json()
-
-        // Linkヘッダーから次のページのURLを取得
-        const linkHeader = response.headers.get('link')
-        let nextPageUrl: string | null = null
+        const data: ShopifyResponse = await response.json();
+        const linkHeader = response.headers.get('link');
+        let nextPageUrl: string | null = null;
 
         if (linkHeader) {
-            const links = linkHeader.split(',')
+            const links = linkHeader.split(',');
             for (const link of links) {
                 if (link.includes('rel="next"')) {
-                    const match = link.match(/<(.+?)>/)
+                    const match = link.match(/<(.+?)>/);
                     if (match) {
-                        nextPageUrl = match[1]
+                        nextPageUrl = match[1];
                     }
                 }
             }
         }
 
-        console.log(`✅ Retrieved ${data.orders.length} orders`)
+        console.log(`✅ Retrieved ${data.orders.length} orders`);
         if (nextPageUrl) {
-            console.log(`📄 Next page available`)
+            console.log(`📄 Next page available`);
         }
 
-        // レスポンスを返す
         return new Response(
             JSON.stringify({
                 orders: data.orders,
@@ -89,10 +125,10 @@ serve(async (req: Request) => {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                 status: 200,
             },
-        )
+        );
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-        console.error('❌ Error:', errorMessage)
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error('❌ Error:', errorMessage);
         return new Response(
             JSON.stringify({
                 error: errorMessage,
@@ -103,6 +139,6 @@ serve(async (req: Request) => {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                 status: 500,
             },
-        )
+        );
     }
-})
+});

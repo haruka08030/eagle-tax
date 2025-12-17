@@ -13,6 +13,21 @@ Shopifyの注文データを取得し、州ごとの「Economic Nexus（経済�
 - ✅ **リアルタイム診断**: 売上額と取引回数の両方を考慮した判定
 - ✅ **セキュア**: アクセストークンをクライアント側に露出しない
 
+---
+
+## 📚 技術スタック
+
+| レイヤー | 技術 | 用途 |
+|---------|------|------|
+| **Frontend** | Flutter (Web) | UIとクライアントロジック |
+| **Backend** | Supabase Edge Functions | APIプロキシ |
+| **Database** | PostgreSQL (Supabase) | 州データ保存 |
+| **API** | Shopify Admin API | 注文データ取得 |
+| **Language** | Dart, TypeScript | アプリとEdge Function |
+| **Hosting** | Vercel / Netlify | Webホスティング |
+
+---
+
 
 ## 🗄️ データベース構造
 
@@ -52,6 +67,8 @@ docs/
 ├── DATE_AND_PAGINATION.md          # 実装詳細
 └── IMPROVEMENTS.md                 # 改善履歴
 ```
+
+
 
 ## 📝 使用方法
 
